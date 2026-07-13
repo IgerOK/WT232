@@ -1,5 +1,5 @@
 // ============================================================================
-// WT232 Terminal v0.1
+// WT232 Terminal v0.2
 // ============================================================================
 
 #ifndef WINVER
@@ -55,7 +55,7 @@ static ThemeColors *g_pTheme = &g_themes[THEME_LIGHT];
 // ============================================================================
 // ВЕРСИЯ
 // ============================================================================
-#define APP_VERSION L"v0.1"
+#define APP_VERSION L"v0.2"
 
 // ============================================================================
 // ИДЕНТИФИКАТОРЫ КОНТРОЛОВ
@@ -84,7 +84,7 @@ static ThemeColors *g_pTheme = &g_themes[THEME_LIGHT];
 #define IDC_COMBO_FONT_SIZE 1036
 #define IDC_EDIT_MACRO_TITLE 1037
 #define IDC_BTN_THEME       1038
-#define MAX_MACRO_TITLE_LEN  32
+#define MAX_MACRO_TITLE_LEN  64
 
 // Скрипты
 #define IDC_EDIT_SCRIPT_PATH 1029
@@ -119,7 +119,7 @@ static ThemeColors *g_pTheme = &g_themes[THEME_LIGHT];
 #define MACROS_PER_BANK     15
 #define MACRO_COLS          3
 #define MACRO_ROWS          5
-#define MACRO_LABEL_LEN     32
+#define MACRO_LABEL_LEN     64
 #define MACRO_CMD_LEN       256
 
 #define FLOW_NONE     0
@@ -136,6 +136,9 @@ static ThemeColors *g_pTheme = &g_themes[THEME_LIGHT];
 #define TIMER_READ_ID      2002
 #define TIMER_REPEAT_ID    2003
 #define TIMER_SCRIPT_ID    2004
+
+// ЦВЕТ ДЛЯ ЭХА (красный)
+#define ECHO_COLOR RGB(255, 0, 0)
 
 // ============================================================================
 // СТРУКТУРЫ
@@ -234,6 +237,7 @@ static BOOL g_isScriptRunning = FALSE;
 static BOOL g_scriptHasStopMarker = FALSE;
 
 static MacroSlot g_macroBanks[MACRO_BANK_COUNT][MACROS_PER_BANK];
+static wchar_t g_macroBankTitles[MACRO_BANK_COUNT][MAX_MACRO_TITLE_LEN] = {0};
 static BOOL g_macroBankLoaded[MACRO_BANK_COUNT] = {0};
 static HWND g_hwndMacroPads[MACRO_BANK_COUNT] = {0};
 static HWND g_hwndMacroEdit = NULL;
@@ -309,6 +313,7 @@ static void LoadMacroBank(int bankIndex);
 static void SaveMacroBank(int bankIndex);
 static void SendMacroCommand(int bankIndex, int slotIndex);
 static void UpdateMacroButtons(int bankIndex);
+static void UpdateMacroButtonTitle(int bankIndex);
 static void ShowMacroPad(HWND hParent, int bankIndex);
 static void LayoutButtons(HWND hwnd);
 static void CloseMacroEdit(void);
@@ -319,6 +324,10 @@ static void LoadMacroPadPosition(int bankIndex, int *px, int *py);
 static void SaveAllMacroWindowsState(void);
 static void ApplyThemeToWindow(HWND hwnd);
 static void SetTheme(int theme);
+static void ResetMacroLoadedFlags(void);
+static void LoadMacroBankTitles(void);
+static void SaveMacroBankTitle(int bankIndex);
+static void UpdateAllMacroButtonTitles(void);
 
 static void InitIniPaths(void);
 static BOOL ReadIniString(const wchar_t *section, const wchar_t *key, wchar_t *out, int maxLen, const wchar_t *defVal);
@@ -514,6 +523,11 @@ void append_rx_text_colored(const wchar_t *text, COLORREF color) {
     SendMessageW(g_hEditRx, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
     SendMessageW(g_hEditRx, EM_REPLACESEL, FALSE, (LPARAM)text);
     SendMessageW(g_hEditRx, WM_VSCROLL, SB_BOTTOM, 0);
+}
+
+// Функция для вывода эха красным цветом
+static void append_echo_text(const wchar_t *text) {
+    append_rx_text_colored(text, ECHO_COLOR);
 }
 
 void render_rx_buffer(BOOL appendMode) {
@@ -951,8 +965,8 @@ void com_send(HWND hwndParent) {
             wchar_t suffixBuf[256] = {0};
             GetWindowTextW(g_hComboSuffix, suffixBuf, 255);
             if (wcslen(suffixBuf) > 0 && txMode == TX_MODE_TEXT) wcscat(echoBuf, suffixBuf);
-            append_rx_text_colored(echoBuf, RGB(200, 0, 0));
-            append_rx_text_colored(L"\r\n", RGB(200, 0, 0));
+            append_echo_text(echoBuf);
+            append_echo_text(L"\r\n");
         }
         SetFocus(g_hComboTx);
     } else {
@@ -1025,6 +1039,35 @@ static void RunNextScriptCommand(void) {
     SetTimer(g_hwndTerminal, TIMER_SCRIPT_ID, delay, NULL);
 }
 
+static void LoadMacroBankTitles(void) {
+    for (int bankIndex = 0; bankIndex < MACRO_BANK_COUNT; bankIndex++) {
+        wchar_t section[32];
+        swprintf(section, 32, L"MacroSlots_%d", bankIndex);
+        
+        wchar_t titleKey[32];
+        swprintf(titleKey, 32, L"BankTitle");
+        wchar_t titleBuf[MAX_MACRO_TITLE_LEN] = {0};
+        ReadIniString(section, titleKey, titleBuf, MAX_MACRO_TITLE_LEN, L"");
+        
+        if (wcslen(titleBuf) > 0) {
+            wcscpy(g_macroBankTitles[bankIndex], titleBuf);
+        } else {
+            swprintf(g_macroBankTitles[bankIndex], MAX_MACRO_TITLE_LEN, L"M%d", bankIndex + 1);
+        }
+    }
+}
+
+static void SaveMacroBankTitle(int bankIndex) {
+    if (bankIndex < 0 || bankIndex >= MACRO_BANK_COUNT) return;
+    
+    wchar_t section[32];
+    swprintf(section, 32, L"MacroSlots_%d", bankIndex);
+    
+    wchar_t titleKey[32];
+    swprintf(titleKey, 32, L"BankTitle");
+    WriteIniString(section, titleKey, g_macroBankTitles[bankIndex]);
+}
+
 static void LoadMacroBank(int bankIndex) {
     if (bankIndex < 0 || bankIndex >= MACRO_BANK_COUNT) return;
     if (g_macroBankLoaded[bankIndex]) return;
@@ -1032,27 +1075,19 @@ static void LoadMacroBank(int bankIndex) {
     wchar_t section[32];
     swprintf(section, 32, L"MacroSlots_%d", bankIndex);
     
-    wchar_t titleKey[32];
-    swprintf(titleKey, 32, L"BankTitle");
-    wchar_t titleBuf[MAX_MACRO_TITLE_LEN] = {0};
-    ReadIniString(section, titleKey, titleBuf, MAX_MACRO_TITLE_LEN, L"");
-    
     for (int i = 0; i < MACROS_PER_BANK; i++) {
         wchar_t keyLabel[32], keyCmd[32];
         swprintf(keyLabel, 32, L"Slot%d_Label", i);
         swprintf(keyCmd, 32, L"Slot%d_Cmd", i);
         
-        ReadIniString(section, keyLabel, g_macroBanks[bankIndex][i].label, MACRO_LABEL_LEN, L"");
-        ReadIniString(section, keyCmd, g_macroBanks[bankIndex][i].command, MACRO_CMD_LEN, L"");
+        wchar_t labelBuf[MACRO_LABEL_LEN] = {0};
+        wchar_t cmdBuf[MACRO_CMD_LEN] = {0};
         
-        if (i == 0 && wcslen(titleBuf) > 0) {
-            wcscpy(g_macroBanks[bankIndex][i].label, titleBuf);
-        }
+        ReadIniString(section, keyLabel, labelBuf, MACRO_LABEL_LEN, L"");
+        ReadIniString(section, keyCmd, cmdBuf, MACRO_CMD_LEN, L"");
         
-        if (wcslen(g_macroBanks[bankIndex][i].label) == 0 && 
-            wcslen(g_macroBanks[bankIndex][i].command) == 0) {
-            swprintf(g_macroBanks[bankIndex][i].label, MACRO_LABEL_LEN, L"M%d-%d", bankIndex + 1, i + 1);
-        }
+        wcscpy(g_macroBanks[bankIndex][i].label, labelBuf);
+        wcscpy(g_macroBanks[bankIndex][i].command, cmdBuf);
     }
     g_macroBankLoaded[bankIndex] = TRUE;
 }
@@ -1065,9 +1100,7 @@ static void SaveMacroBank(int bankIndex) {
     
     WritePrivateProfileStringW(section, NULL, NULL, g_iniPath);
     
-    wchar_t titleKey[32];
-    swprintf(titleKey, 32, L"BankTitle");
-    WriteIniString(section, titleKey, g_macroBanks[bankIndex][0].label);
+    SaveMacroBankTitle(bankIndex);
     
     for (int i = 0; i < MACROS_PER_BANK; i++) {
         wchar_t keyLabel[32], keyCmd[32];
@@ -1119,7 +1152,7 @@ static void SendMacroCommand(int bankIndex, int slotIndex) {
             if (is_echo_enabled() && g_hwndTerminal) {
                 wchar_t echoMsg[MACRO_CMD_LEN + 4];
                 swprintf(echoMsg, sizeof(echoMsg)/sizeof(wchar_t), L"%ls\r\n", slot->command);
-                append_rx_text_colored(echoMsg, RGB(0, 128, 0));
+                append_echo_text(echoMsg);
             }
         } else {
             MessageBoxW(g_hwndMacroPads[bankIndex], L"\u041e\u0448\u0438\u0431\u043a\u0430 \u043e\u0442\u043f\u0440\u0430\u0432\u043a\u0438!", L"\u041e\u0448\u0438\u0431\u043a\u0430", MB_ICONERROR | MB_OK);
@@ -1134,7 +1167,7 @@ static void UpdateMacroButtons(int bankIndex) {
     for (int i = 0; i < MACROS_PER_BANK; i++) {
         HWND hBtn = GetDlgItem(g_hwndMacroPads[bankIndex], IDC_BTN_MACRO_BASE + i);
         if (hBtn) {
-            wchar_t displayText[64];
+            wchar_t displayText[64] = L"";
             
             if (g_showCommand && wcslen(g_macroBanks[bankIndex][i].command) > 0) {
                 wcsncpy(displayText, g_macroBanks[bankIndex][i].command, 20);
@@ -1158,20 +1191,30 @@ static void UpdateMacroButtonTitle(int bankIndex) {
     if (!hBtn || !IsWindow(hBtn)) return;
     
     wchar_t title[MAX_MACRO_TITLE_LEN] = {0};
-    wcsncpy(title, g_macroBanks[bankIndex][0].label, MAX_MACRO_TITLE_LEN - 1);
+    wcsncpy(title, g_macroBankTitles[bankIndex], MAX_MACRO_TITLE_LEN - 1);
     
-    wchar_t defaultPattern[16];
-    swprintf(defaultPattern, 16, L"M%d-%d", bankIndex + 1, 1);
-    if (wcslen(title) == 0 || wcsstr(title, L"M") == title) {
-        wchar_t defaultTitle[8];
-        swprintf(defaultTitle, 8, L"M%d", bankIndex + 1);
-        SetWindowTextW(hBtn, defaultTitle);
-    } else {
-        if (wcslen(title) > 10) {
-            title[10] = L'\0';
-            wcscat(title, L"...");
+    if (wcslen(title) > 0) {
+        wchar_t defaultPattern[16];
+        swprintf(defaultPattern, 16, L"M%d-", bankIndex + 1);
+        
+        if (wcsncmp(title, defaultPattern, wcslen(defaultPattern)) != 0) {
+            if (wcslen(title) > 20) {
+                title[20] = L'\0';
+                wcscat(title, L"...");
+            }
+            SetWindowTextW(hBtn, title);
+            return;
         }
-        SetWindowTextW(hBtn, title);
+    }
+    
+    wchar_t defaultTitle[8];
+    swprintf(defaultTitle, 8, L"M%d", bankIndex + 1);
+    SetWindowTextW(hBtn, defaultTitle);
+}
+
+static void UpdateAllMacroButtonTitles(void) {
+    for (int i = 0; i < MACRO_BANK_COUNT; i++) {
+        UpdateMacroButtonTitle(i);
     }
 }
 
@@ -1191,6 +1234,12 @@ static void SaveAllMacroWindowsState(void) {
         wchar_t key[16];
         swprintf(key, 16, L"Bank%d", i);
         WriteIniInt(L"MacroWindows", key, banksOpen[i]);
+    }
+}
+
+static void ResetMacroLoadedFlags(void) {
+    for (int i = 0; i < MACRO_BANK_COUNT; i++) {
+        g_macroBankLoaded[i] = FALSE;
     }
 }
 
@@ -1505,17 +1554,24 @@ LRESULT CALLBACK MacroPadWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             CREATESTRUCTW *cs = (CREATESTRUCTW*)lp;
             s_bankIndex = (int)(LONG_PTR)cs->lpCreateParams;
             
+            // Всегда начинаем в режиме RUN
+            g_editMode = FALSE;
+            
             LoadMacroBank(s_bankIndex);            
-        
+
+            // Создаем поле без ES_READONLY, управление через EnableWindow
             hTitleEdit = CreateWindowExW(0, L"EDIT", 
-                g_macroBanks[s_bankIndex][0].label,
+                g_macroBankTitles[s_bankIndex],
                 WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
                 130, 10, 120, 24, hwnd, (HMENU)IDC_EDIT_MACRO_TITLE, NULL, NULL);
+
+            // Изначально поле только для чтения
+            EnableWindow(hTitleEdit, FALSE);
 
             HFONT hTitleFont = CreateTitleFont(-15);
             SendMessage(hTitleEdit, WM_SETFONT, (WPARAM)hTitleFont, TRUE);
 
-            if (wcslen(g_macroBanks[s_bankIndex][0].label) == 0) {
+            if (wcslen(g_macroBankTitles[s_bankIndex]) == 0) {
                 SetWindowTextW(hTitleEdit, L"");
             }
             
@@ -1532,7 +1588,7 @@ LRESULT CALLBACK MacroPadWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             SendMessage(hDispBtn, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
             
             for (int i = 0; i < MACROS_PER_BANK; i++) {
-                wchar_t displayText[64];
+                wchar_t displayText[64] = L"";
                 
                 if (g_showCommand && wcslen(g_macroBanks[s_bankIndex][i].command) > 0) {
                     wcsncpy(displayText, g_macroBanks[s_bankIndex][i].command, 20);
@@ -1590,21 +1646,26 @@ LRESULT CALLBACK MacroPadWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             
             if (id == IDC_BTN_MACRO_MODE) {
                 if (g_editMode) {
-                    SetBkColor(hdc, RGB(200, 80, 80));
+                    SetTextColor(hdc, RGB(255, 200, 0));  // Желтый текст в режиме EDIT
                 } else {
-                    SetBkColor(hdc, RGB(80, 200, 80));
+                    SetTextColor(hdc, RGB(0, 200, 0));    // Зеленый текст в режиме RUN
                 }
             }
             if (id == IDC_BTN_MACRO_DISPLAY) {
                 if (g_showCommand) {
-                    SetBkColor(hdc, RGB(80, 80, 200));
+                    SetTextColor(hdc, RGB(0, 100, 200));  // Синий текст для CMD
                 } else {
-                    SetBkColor(hdc, RGB(80, 200, 80));
+                    SetTextColor(hdc, RGB(0, 150, 0));    // Зеленый текст для LABEL
                 }
             }
             return (LRESULT)CreateSolidBrush(g_pTheme->btnBg);
         }
-        case WM_CTLCOLOREDIT:
+        case WM_CTLCOLOREDIT: {
+            HDC hdc = (HDC)wp;
+            SetBkColor(hdc, g_pTheme->editBg);
+            SetTextColor(hdc, RGB(0, 0, 0));  // Всегда черный текст
+            return (LRESULT)CreateSolidBrush(g_pTheme->editBg);
+        }
         case WM_CTLCOLORSTATIC: {
             HDC hdc = (HDC)wp;
             SetBkColor(hdc, g_pTheme->editBg);
@@ -1615,11 +1676,11 @@ LRESULT CALLBACK MacroPadWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             int id = LOWORD(wp);
             
             if (id == IDC_EDIT_MACRO_TITLE) {
-                if (HIWORD(wp) == EN_CHANGE) {
+                if (HIWORD(wp) == EN_CHANGE && g_editMode) {
                     HWND hEdit = GetDlgItem(hwnd, IDC_EDIT_MACRO_TITLE);
                     if (hEdit) {
-                        GetWindowTextW(hEdit, g_macroBanks[s_bankIndex][0].label, MACRO_LABEL_LEN);
-                        SaveMacroBank(s_bankIndex);
+                        GetWindowTextW(hEdit, g_macroBankTitles[s_bankIndex], MAX_MACRO_TITLE_LEN);
+                        SaveMacroBankTitle(s_bankIndex);
                         UpdateMacroButtonTitle(s_bankIndex);
                     }
                 }
@@ -1630,6 +1691,26 @@ LRESULT CALLBACK MacroPadWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 g_editMode = !g_editMode;
                 SetWindowTextW(hModeBtn, g_editMode ? L"EDIT" : L"RUN");
                 InvalidateRect(hModeBtn, NULL, TRUE);
+                
+                // Переключаем режим редактирования поля названия банка
+                HWND hTitleEdit = GetDlgItem(hwnd, IDC_EDIT_MACRO_TITLE);
+                if (hTitleEdit) {
+                    if (g_editMode) {
+                        // В режиме EDIT - разрешаем редактирование
+                        EnableWindow(hTitleEdit, TRUE);
+                        SetFocus(hTitleEdit);
+                        SendMessage(hTitleEdit, EM_SETSEL, 0, -1);
+                    } else {
+                        // В режиме RUN - только для чтения
+                        EnableWindow(hTitleEdit, FALSE);
+                        // Снимаем выделение
+                        SendMessage(hTitleEdit, EM_SETSEL, 0, 0);
+                    }
+                    // Обновляем внешний вид поля
+                    InvalidateRect(hTitleEdit, NULL, TRUE);
+                    UpdateWindow(hTitleEdit);
+                }
+                
                 if (!g_editMode && g_hwndMacroEdit) {
                     CloseMacroEdit();
                 }
@@ -1657,6 +1738,8 @@ LRESULT CALLBACK MacroPadWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_CLOSE: {
             if (g_hwndMacroEdit) CloseMacroEdit();
+            // Сбрасываем режим редактирования
+            g_editMode = FALSE;
             DestroyWindow(hwnd);
             if (s_bankIndex >= 0 && s_bankIndex < MACRO_BANK_COUNT) {
                 g_hwndMacroPads[s_bankIndex] = NULL;
@@ -1689,6 +1772,9 @@ static void ShowMacroPad(HWND hParent, int bankIndex) {
         SetForegroundWindow(g_hwndMacroPads[bankIndex]);
         return;
     }
+    
+    g_macroBankLoaded[bankIndex] = FALSE;
+    g_editMode = FALSE;  // Всегда начинаем в режиме RUN
     
     static BOOL classRegistered = FALSE;
     if (!classRegistered) {
@@ -1840,6 +1926,13 @@ static void CreateDefaultIni(void) {
     for (int bank = 0; bank < MACRO_BANK_COUNT; bank++) {
         wchar_t section[32];
         swprintf(section, 32, L"MacroSlots_%d", bank);
+        
+        wchar_t titleKey[32];
+        swprintf(titleKey, 32, L"BankTitle");
+        wchar_t defaultTitle[8];
+        swprintf(defaultTitle, 8, L"M%d", bank + 1);
+        WriteIniString(section, titleKey, defaultTitle);
+        
         for (int i = 0; i < MACROS_PER_BANK; i++) {
             wchar_t keyLabel[32], keyCmd[32];
             swprintf(keyLabel, 32, L"Slot%d_Label", i);
@@ -1920,6 +2013,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmd, int show) {
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Consolas");
     g_hTitleFont = CreateTitleFont(-15);
+
+    for (int i = 0; i < MACRO_BANK_COUNT; i++) {
+        g_macroBankLoaded[i] = FALSE;
+        g_macroBankTitles[i][0] = L'\0';
+    }
+    
+    LoadMacroBankTitles();
 
     WNDCLASSW wc = {0};
     wc.lpfnWndProc = WndProc;
@@ -2136,6 +2236,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                             SetTimer(g_hwndTerminal, TIMER_READ_ID, 50, NULL);
                             ApplyThemeToWindow(g_hwndTerminal);
                             
+                            UpdateAllMacroButtonTitles();
+                            
                             int state = ReadIniInt(L"Terminal", L"State", SW_SHOW);
                             ShowWindow(g_hwndTerminal, state);
                             UpdateWindow(g_hwndTerminal);
@@ -2305,9 +2407,15 @@ LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             SendMessage(g_hBtnRunScript, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
 
             for (int m = 0; m < MACRO_BANK_COUNT; m++) {
-                wchar_t lbl[8];
-                swprintf(lbl, 8, L"M%d", m + 1);
-                g_hMacroBankBtns[m] = CreateWindowExW(0, L"BUTTON", lbl,
+                wchar_t title[MAX_MACRO_TITLE_LEN] = {0};
+                wcsncpy(title, g_macroBankTitles[m], MAX_MACRO_TITLE_LEN - 1);
+                
+                if (wcslen(title) > 20) {
+                    title[20] = L'\0';
+                    wcscat(title, L"...");
+                }
+                
+                g_hMacroBankBtns[m] = CreateWindowExW(0, L"BUTTON", title,
                     WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 0, 0, 10, 22,
                     hwnd, (HMENU)(LONG_PTR)(IDC_BTN_MACRO_BASE + m), NULL, NULL);
                 SendMessage(g_hMacroBankBtns[m], WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
@@ -2575,6 +2683,8 @@ LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             KillTimer(hwnd, TIMER_READ_ID);
             KillTimer(hwnd, TIMER_REPEAT_ID);
             KillTimer(hwnd, TIMER_SCRIPT_ID);
+            
+            ResetMacroLoadedFlags();
             
             for (int m = 0; m < MACRO_BANK_COUNT; m++) {
                 if (g_hwndMacroPads[m] && IsWindow(g_hwndMacroPads[m])) {
