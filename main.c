@@ -1,6 +1,7 @@
-// =====================================================================2516===
-// WT232 Terminal v0.3 (Fixes + UI Improvements) UTF-16 LE BOM  
-// ============================================================================
+// ============================================================================================2554====
+// WT232 Terminal v0.3.1 (Flow Control Help + UI Fixes) UTF-16 LE BOM
+// ====================================================================================================
+
 #ifndef WINVER
 #define WINVER 0x0501
 #endif
@@ -13,6 +14,7 @@
 #ifndef _UNICODE
 #define _UNICODE
 #endif
+
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
 #include <commctrl.h>
@@ -24,27 +26,11 @@
 #include <commdlg.h>
 #include <shellapi.h>
 
-// ============================================================================
-// ТЕМЫ ОФОРМЛЕНИЯ (ТОЛЬКО СВЕТЛАЯ)
-// ============================================================================
-typedef struct {
-    COLORREF bgColor;
-    COLORREF fgColor;
-    COLORREF btnBg;
-    COLORREF btnFg;
-    COLORREF editBg;
-    COLORREF editFg;
-} ThemeColors;
+// ====================================================================================================
+// Константы и макросы
+// ====================================================================================================
 
-static ThemeColors g_theme = {
-    RGB(240, 240, 245), RGB(0, 0, 0), RGB(230, 230, 240), RGB(0, 0, 0), RGB(255, 255, 255), RGB(0, 0, 0)
-};
-static ThemeColors *g_pTheme = &g_theme;
-
-// ============================================================================
-// ВЕРСИЯ И КОНСТАНТЫ
-// ============================================================================
-#define APP_VERSION L"v0.3"
+#define APP_VERSION L"v0.3.1"
 #define MAX_PORT_NAME       64
 #define RX_BUF_SIZE         4096
 #define MAX_HISTORY         30
@@ -55,15 +41,15 @@ static ThemeColors *g_pTheme = &g_theme;
 #define MAX_MACRO_TITLE_LEN 64
 #define DUMP_LINE_SIZE      16
 
-#define FLOW_NONE     0
-#define FLOW_XONXOFF  1
-#define FLOW_RTSCTS   2
-#define FLOW_RS485    3
+#define FLOW_NONE           0
+#define FLOW_XONXOFF        1
+#define FLOW_RTSCCTS        2
+#define FLOW_RS485          3
 
-#define TX_MODE_HEX   0
-#define TX_MODE_TEXT  1
-#define RX_MODE_TEXT  0
-#define RX_MODE_DUMP  1
+#define TX_MODE_HEX         0
+#define TX_MODE_TEXT        1
+#define RX_MODE_TEXT        0
+#define RX_MODE_DUMP        1
 
 #define TIMER_RECONNECT_ID      2001
 #define TIMER_SCRIPT_ID         2004
@@ -72,67 +58,70 @@ static ThemeColors *g_pTheme = &g_theme;
 #define WM_RX_DATA_READY    (WM_APP + 1)
 #define WM_TX_TICK          (WM_APP + 2)
 
-#define ECHO_COLOR RGB(255, 0, 0)
-#define HEX_ECHO_COLOR RGB(0, 0, 0)
+#define ECHO_COLOR          RGB(255, 0, 0)
+#define HEX_ECHO_COLOR      RGB(0, 0, 0)
 
-// ============================================================================
-// ИДЕНТИФИКАТОРЫ
-// ============================================================================
-#define IDC_COMBO_PORT      1001
-#define IDC_COMBO_BAUD      1002
-#define IDC_COMBO_DATABITS  1011
-#define IDC_COMBO_PARITY    1012
-#define IDC_COMBO_STOPBITS  1013
-#define IDC_COMBO_FLOW      1004
-#define IDC_BTN_INFO        1007
-#define IDC_EDIT_RX         1009
-#define IDC_COMBO_TX        1020
-#define IDC_COMBO_SUFFIX    1021
-#define IDC_BTN_SUFFIX_INFO 1022
-#define IDC_BTN_SEND        1006
-#define IDC_BTN_CLEAR       1014
-#define IDC_CHK_ECHO        1018
-#define IDC_COMBO_ENC       1015
-#define IDC_CHK_TX_HEX      1024
-#define IDC_CHK_DUMP        1023
-#define IDC_BTN_ABOUT       1025
-#define IDC_EDIT_DELAY      1027
-#define IDC_CHK_REPEAT      1028
-#define IDC_COMBO_FONT_SIZE 1036
-#define IDC_EDIT_MACRO_TITLE 1037
-#define IDC_CHK_TOPMOST     1038 // Чекбокс UP
+// ====================================================================================================
+// ID элементов управления
+// ====================================================================================================
 
-#define IDC_EDIT_SCRIPT_PATH 1029
-#define IDC_BTN_LOAD_SCRIPT  1030
-#define IDC_BTN_RUN_SCRIPT   1031
-#define IDC_BTN_SCRIPT_INFO  1032
+#define IDC_COMBO_PORT          1001
+#define IDC_COMBO_BAUD          1002
+#define IDC_COMBO_DATABITS      1011
+#define IDC_COMBO_PARITY        1012
+#define IDC_COMBO_STOPBITS      1013
+#define IDC_COMBO_FLOW          1004
+#define IDC_BTN_INFO            1007
+#define IDC_BTN_FLOW_INFO       1039 // Новая кнопка справки Flow Control
+#define IDC_EDIT_RX             1009
+#define IDC_COMBO_TX            1020
+#define IDC_COMBO_SUFFIX        1021
+#define IDC_BTN_SUFFIX_INFO     1022
+#define IDC_BTN_SEND            1006
+#define IDC_BTN_CLEAR           1014
+#define IDC_CHK_ECHO            1018
+#define IDC_COMBO_ENC           1015
+#define IDC_CHK_TX_HEX          1024
+#define IDC_CHK_DUMP            1023
+#define IDC_BTN_ABOUT           1025
+#define IDC_EDIT_DELAY          1027
+#define IDC_CHK_REPEAT          1028
+#define IDC_COMBO_FONT_SIZE     1036
+#define IDC_EDIT_MACRO_TITLE    1037
+#define IDC_CHK_TOPMOST         1038 // 'Всегда поверх'
 
-#define MACRO_BANK_COUNT    5
-#define MACROS_PER_BANK     24
-#define MACRO_COLS          4
-#define MACRO_ROWS          6
+#define IDC_EDIT_SCRIPT_PATH    1029
+#define IDC_BTN_LOAD_SCRIPT     1030
+#define IDC_BTN_RUN_SCRIPT      1031
+#define IDC_BTN_SCRIPT_INFO     1032
 
-#define IDC_BTN_MACRO_BASE          1050
-#define IDC_BTN_MACRO_MODE          (IDC_BTN_MACRO_BASE + MACROS_PER_BANK)
-#define IDC_BTN_MACRO_DISPLAY       (IDC_BTN_MACRO_BASE + MACROS_PER_BANK + 1)
-#define IDC_STATIC_MACRO_STATUS     (IDC_BTN_MACRO_BASE + MACROS_PER_BANK + 2)
-#define IDC_MACRO_SCRIPT_PATH       2001
-#define IDC_MACRO_BTN_SCRIPT_INFO   2002
-#define IDC_MACRO_BTN_LOAD          2003
-#define IDC_MACRO_BTN_RUN           2004
-#define IDC_MACRO_BTN_EDIT          2005
+#define MACRO_BANK_COUNT        5
+#define MACROS_PER_BANK         24
+#define MACRO_COLS              4
+#define MACRO_ROWS              6
 
-#define IDC_EDIT_MACRO_NAME  3001
-#define IDC_EDIT_MACRO_CMD   3002
-#define IDC_BTN_MACRO_SAVE   3003
-#define IDC_BTN_MACRO_CANCEL 3004
+#define IDC_BTN_MACRO_BASE              1050
+#define IDC_BTN_MACRO_MODE              (IDC_BTN_MACRO_BASE + MACROS_PER_BANK)
+#define IDC_BTN_MACRO_DISPLAY           (IDC_BTN_MACRO_BASE + MACROS_PER_BANK + 1)
+#define IDC_STATIC_MACRO_STATUS         (IDC_BTN_MACRO_BASE + MACROS_PER_BANK + 2)
+#define IDC_MACRO_SCRIPT_PATH           2001
+#define IDC_MACRO_BTN_SCRIPT_INFO       2002
+#define IDC_MACRO_BTN_LOAD              2003
+#define IDC_MACRO_BTN_RUN               2004
+#define IDC_MACRO_BTN_EDIT              2005
 
-#define IDC_BTN_OK          1008
-#define IDC_BTN_CANCEL      1009
+#define IDC_EDIT_MACRO_NAME     3001
+#define IDC_EDIT_MACRO_CMD      3002
+#define IDC_BTN_MACRO_SAVE      3003
+#define IDC_BTN_MACRO_CANCEL    3004
 
-// ============================================================================
-// СТРУКТУРЫ
-// ============================================================================
+#define IDC_BTN_OK              1008
+#define IDC_BTN_CANCEL          1009
+
+// ====================================================================================================
+// Структуры данных
+// ====================================================================================================
+
 typedef struct {
     wchar_t label[MACRO_LABEL_LEN];
     wchar_t command[MACRO_CMD_LEN];
@@ -157,18 +146,19 @@ typedef struct {
 } com_session_t;
 
 typedef struct {
-    const wchar_t *name;
+    const wchar_t* name;
     UINT codepage;
 } EncodingEntry;
 
 typedef struct {
-    BYTE *data;
+    BYTE data;
     DWORD len;
 } RxDataPacket;
 
-// ============================================================================
-// ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
-// ============================================================================
+// ====================================================================================================
+// Глобальные переменные
+// ====================================================================================================
+
 HWND g_hComboPort = NULL;
 HWND g_hComboBaud = NULL;
 HWND g_hComboDataBits = NULL;
@@ -220,7 +210,7 @@ static HANDLE g_hRxThread = NULL;
 static HANDLE g_hTxThread = NULL;
 static HANDLE g_hRxStopEvent = NULL;
 static HANDLE g_hTxStopEvent = NULL;
-static DWORD  g_txIntervalMs = 1000;
+static DWORD g_txIntervalMs = 1000;
 
 static wchar_t g_usbInstanceId[512] = {0};
 static wchar_t g_regBuffer[512] = {0};
@@ -282,35 +272,36 @@ typedef struct {
     HWND hBtnCancel;
 } MacroEditCtx;
 
-// Убраны ASCII и CP1252
+// Кодировки (без ASCII/CP1252 по памяти пользователя)
 static const EncodingEntry g_encodings[] = {
-    { L"UTF-8", 65001 }, 
+    { L"UTF-8", 65001 },
     { L"CP1251", 1251 },
-    { L"CP866", 866 }, 
+    { L"CP866", 866 },
     { L"KOI8-R", 20866 },
 };
 static const int g_encodingCount = sizeof(g_encodings) / sizeof(g_encodings[0]);
 
 static const wchar_t g_aboutText[] =
-L"WT232 Terminal " APP_VERSION L"\r\n"
-L"==========================================\r\n"
-L"Описание:\r\n"
-L"Терминал для работы с COM-портами.\r\n"
-L"  Поддержка HEX/TEXT/DUMP, инлайн-HEX (`XX`).\r\n"
-L"  Макросы (5 банков x 24 ячейки).\r\n"
-L"  Асинхронный ввод-вывод (Threads).\r\n"
-L"\r\n"
-L"Кодировки:\r\n"
-L"  Для кириллицы используйте CP1251 или CP866.\r\n"
-L"  UTF-8 подходит для современных устройств.\r\n"
-L"==========================================\r\n"
-L"MIT License\r\n"
-L"Copyright (c) 2026 IgerOK\r\n"
-L"https://github.com/IgerOK/WT232\r\n";
+    L"WT232 Terminal " APP_VERSION L"\r\n"
+    L"=========================================\r\n"
+    L"Особенности:\r\n"
+    L" • Работа с COM-портами (USB CDC/ACM).\r\n"
+    L" • Режимы отображения HEX/TEXT/DUMP, инлайн-HEX (`XX`).\r\n"
+    L" • Макросы (5 банков x 24 ячейки).\r\n"
+    L" • Синхронный автоповтор (Threads).\r\n"
+    L"\r\n"
+    L"Поддержка кодировок:\r\n"
+    L" • Кириллица поддерживается в CP1251 или CP866.\r\n"
+    L" • UTF-8 подходит для современных устройств.\r\n"
+    L"=========================================\r\n"
+    L"MIT License\r\n"
+    L"Copyright (c) 2026 IgerOK\r\n"
+    L"https://github.com/IgerOK/WT232\r\n";
 
-// ============================================================================
-// ПРОТОТИПЫ
-// ============================================================================
+// ====================================================================================================
+// Прототипы функций
+// ====================================================================================================
+
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 LRESULT CALLBACK InfoWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
@@ -319,28 +310,29 @@ LRESULT CALLBACK MacroPadWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 LRESULT CALLBACK MacroEditWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 BOOL CALLBACK SetFontCallback(HWND hWndChild, LPARAM lParam);
 BOOL CALLBACK ApplyThemeCallback(HWND hWndChild, LPARAM lParam);
-void init_com_ports(HWND hwndParent, BOOL showDetails, const wchar_t *saveTargetName);
-void check_and_reconnect_search(wchar_t *outFoundPortName, BOOL *pIsFound);
+
+void init_com_ports(HWND hwndParent, BOOL showDetails, const wchar_t* saveTargetName);
+void check_and_reconnect_search(wchar_t* outFoundPortName, BOOL* pIsFound);
 void com_close(void);
-BOOL com_open(const wchar_t *portName, int baudrate);
-void get_advanced_usb_descriptors(HDEVINFO hDevInfo, SP_DEVINFO_DATA *pDevInfo, const wchar_t *instanceId,
-    wchar_t *outVid, wchar_t *outPid, wchar_t *outSerial, wchar_t *outMfg,
-    wchar_t *outProduct, wchar_t *outRawSerial, wchar_t *outCdcInfo);
+BOOL com_open(const wchar_t* portName, int baudrate);
+void get_advanced_usb_descriptors(HDEVINFO hDevInfo, SP_DEVINFO_DATA* pDevInfo, const wchar_t* instanceId,
+                                  wchar_t* outVid, wchar_t* outPid, wchar_t* outSerial, wchar_t* outMfg,
+                                  wchar_t* outProduct, wchar_t* outRawSerial, wchar_t* outCdcInfo);
 void com_send_ui(HWND hwndParent);
-void update_terminal_title(const wchar_t *portName, int baudrate);
+void update_terminal_title(const wchar_t* portName, int baudrate);
 void render_rx_buffer(BOOL appendMode);
 UINT get_selected_codepage(void);
 int get_selected_tx_mode(void);
 BOOL is_echo_enabled(void);
 BOOL is_tx_hex_echo_enabled(void);
-void append_rx_text_colored(const wchar_t *text, COLORREF color);
-void append_echo_hex_dump(const BYTE *buf, DWORD len);
-void add_to_history(const wchar_t *msg);
-DWORD parse_text_with_inline_hex(const wchar_t *src, BYTE *dst, DWORD dstMax, UINT codepage);
+void append_rx_text_colored(const wchar_t* text, COLORREF color);
+void append_echo_hex_dump(const BYTE* buf, DWORD len);
+void add_to_history(const wchar_t* msg);
+DWORD parse_text_with_inline_hex(const wchar_t* src, BYTE* dst, DWORD dstMax, UINT codepage);
 int hex_char_val(wchar_t c);
 HFONT CreateMonoFont(int height);
 void update_rx_mode_ui(void);
-void LoadScriptFile(const wchar_t *path);
+void LoadScriptFile(const wchar_t* path);
 void StopScript(void);
 void RunNextScriptCommand(void);
 void ApplyFontSize(int height);
@@ -356,7 +348,7 @@ void CloseMacroEdit(void);
 void SaveMacroFromEdit(void);
 void ShowMacroEditWindow(HWND hParent, int bankIndex, int slotIndex);
 void SaveMacroPadPosition(int bankIndex, int x, int y);
-void LoadMacroPadPosition(int bankIndex, int *px, int *py);
+void LoadMacroPadPosition(int bankIndex, int* px, int* py);
 void SaveAllMacroWindowsState(void);
 void ApplyThemeToWindow(HWND hwnd);
 void ResetMacroLoadedFlags(void);
@@ -364,19 +356,20 @@ void LoadMacroBankTitles(void);
 void SaveMacroBankTitle(int bankIndex);
 void UpdateAllMacroButtonTitles(void);
 void InitIniPaths(void);
-BOOL ReadIniString(const wchar_t *section, const wchar_t *key, wchar_t *out, int maxLen, const wchar_t *defVal);
-int ReadIniInt(const wchar_t *section, const wchar_t *key, int defVal);
-void WriteIniString(const wchar_t *section, const wchar_t *key, const wchar_t *val);
-void WriteIniInt(const wchar_t *section, const wchar_t *key, int val);
+BOOL ReadIniString(const wchar_t* section, const wchar_t* key, wchar_t* out, int maxLen, const wchar_t* defVal);
+int ReadIniInt(const wchar_t* section, const wchar_t* key, int defVal);
+void WriteIniString(const wchar_t* section, const wchar_t* key, const wchar_t* val);
+void WriteIniInt(const wchar_t* section, const wchar_t* key, int val);
 BOOL ValidateIni(void);
 BOOL ReadAllIni(void);
 void WriteAllIni(void);
 void CreateDefaultIni(void);
-void GetMacroScriptPath(int bankIndex, wchar_t *outPath, int maxLen);
-void LoadMacroScript(int bankIndex, const wchar_t *path);
+void GetMacroScriptPath(int bankIndex, wchar_t* outPath, int maxLen);
+void LoadMacroScript(int bankIndex, const wchar_t* path);
 void StopMacroScript(int bankIndex);
 void RunNextMacroScriptCommand(int bankIndex);
 void UpdateMacroScriptUI(HWND hwnd, int bankIndex);
+
 DWORD WINAPI RxThreadProc(LPVOID lpParam);
 DWORD WINAPI TxThreadProc(LPVOID lpParam);
 void StartRxTxThreads(HWND hwndTerm);
@@ -384,19 +377,35 @@ void StopRxTxThreads(void);
 void PrepareAutoSendData(void);
 void DoAutoSendTick(HWND hwndTerm);
 
-// ============================================================================
-// ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-// ============================================================================
+// Тема
+typedef struct {
+    COLORREF bgColor;
+    COLORREF fgColor;
+    COLORREF btnBg;
+    COLORREF btnFg;
+    COLORREF editBg;
+    COLORREF editFg;
+} ThemeColors;
+
+static ThemeColors g_theme = {
+    RGB(240, 240, 245), RGB(0, 0, 0), RGB(230, 230, 240), RGB(0, 0, 0), RGB(255, 255, 255), RGB(0, 0, 0)
+};
+static ThemeColors* g_pTheme = &g_theme;
+
+// ====================================================================================================
+// Вспомогательные функции
+// ====================================================================================================
+
 HFONT CreateMonoFont(int height) {
     return CreateFontW(height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Lucida Console");
+                       DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                       CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Lucida Console");
 }
 
 static HFONT CreateTitleFont(int height) {
     return CreateFontW(height, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+                       DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                       CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 }
 
 void ApplyFontSize(int height) {
@@ -409,7 +418,7 @@ void ApplyFontSize(int height) {
     if (g_hEditScriptPath) SendMessage(g_hEditScriptPath, WM_SETFONT, (WPARAM)g_hMonoFont, TRUE);
     if (g_hComboFontSize) SendMessage(g_hComboFontSize, WM_SETFONT, (WPARAM)g_hMonoFont, TRUE);
     if (g_hComboEnc) SendMessage(g_hComboEnc, WM_SETFONT, (WPARAM)g_hMonoFont, TRUE);
-    
+
     g_fontSize = -height * 72 / 96;
     if (g_fontSize <= 0) g_fontSize = 10;
 }
@@ -441,8 +450,8 @@ void com_close(void) {
     LeaveCriticalSection(&g_csRx);
 }
 
-void update_terminal_title(const wchar_t *portName, int baudrate) {
-    const wchar_t *szParity = L"N";
+void update_terminal_title(const wchar_t* portName, int baudrate) {
+    const wchar_t* szParity = L"N";
     int pIdx = (int)SendMessageW(g_hComboParity, CB_GETCURSEL, 0, 0);
     switch (pIdx) {
         case 1: szParity = L"E"; break; case 2: szParity = L"O"; break;
@@ -462,15 +471,15 @@ void update_terminal_title(const wchar_t *portName, int baudrate) {
     wchar_t szFlow[64] = {0};
     int fIdx = (int)SendMessageW(g_hComboFlow, CB_GETCURSEL, 0, 0);
     if (fIdx != CB_ERR) SendMessageW(g_hComboFlow, CB_GETLBTEXT, fIdx, (LPARAM)szFlow);
-    else wcscpy(szFlow, L"Нет");
+    else wcscpy(szFlow, L"?");
 
     ZeroMemory(g_szTitle, sizeof(g_szTitle));
     swprintf(g_szTitle, sizeof(g_szTitle)/sizeof(wchar_t),
-        L"WT232 Terminal " APP_VERSION L" - [%ls | %d bps | %ls-%ls-%ls | %ls]",
-        portName, baudrate, szDB, szParity, szSB, szFlow);
+             L"WT232 Terminal " APP_VERSION L" - [%ls | %d bps | %ls-%ls-%ls | %ls]",
+             portName, baudrate, szDB, szParity, szSB, szFlow);
 }
 
-BOOL com_open(const wchar_t *portName, int baudrate) {
+BOOL com_open(const wchar_t* portName, int baudrate) {
     wchar_t szPath[MAX_PORT_NAME + 8] = {0};
     swprintf(szPath, sizeof(szPath)/sizeof(wchar_t), L"\\\\.\\%ls", portName);
 
@@ -509,7 +518,7 @@ BOOL com_open(const wchar_t *portName, int baudrate) {
     int flowMode = (int)SendMessageW(g_hComboFlow, CB_GETCURSEL, 0, 0);
     dcb.fOutxCtsFlow = FALSE; dcb.fInX = FALSE; dcb.fOutX = FALSE;
     if (flowMode == FLOW_RS485) dcb.fRtsControl = RTS_CONTROL_TOGGLE;
-    else if (flowMode == FLOW_RTSCTS) { dcb.fOutxCtsFlow = TRUE; dcb.fRtsControl = RTS_CONTROL_HANDSHAKE; }
+    else if (flowMode == FLOW_RTSCCTS) { dcb.fOutxCtsFlow = TRUE; dcb.fRtsControl = RTS_CONTROL_HANDSHAKE; }
     else if (flowMode == FLOW_XONXOFF) { dcb.fInX = TRUE; dcb.fOutX = TRUE; dcb.fRtsControl = RTS_CONTROL_DISABLE; }
     else dcb.fRtsControl = RTS_CONTROL_DISABLE;
 
@@ -553,7 +562,7 @@ BOOL is_tx_hex_echo_enabled(void) {
     return (SendMessageW(g_hChkTxHex, BM_GETCHECK, 0, 0) == BST_CHECKED);
 }
 
-void append_rx_text_colored(const wchar_t *text, COLORREF color) {
+void append_rx_text_colored(const wchar_t* text, COLORREF color) {
     if (!g_hEditRx || !text || wcslen(text) == 0) return;
     int len = GetWindowTextLengthW(g_hEditRx);
     SendMessageW(g_hEditRx, EM_SETSEL, (WPARAM)len, (LPARAM)len);
@@ -564,9 +573,9 @@ void append_rx_text_colored(const wchar_t *text, COLORREF color) {
     SendMessageW(g_hEditRx, WM_VSCROLL, SB_BOTTOM, 0);
 }
 
-static void append_echo_text(const wchar_t *text) { append_rx_text_colored(text, ECHO_COLOR); }
+static void append_echo_text(const wchar_t* text) { append_rx_text_colored(text, ECHO_COLOR); }
 
-void append_echo_hex_dump(const BYTE *buf, DWORD len) {
+void append_echo_hex_dump(const BYTE* buf, DWORD len) {
     if (!buf || len == 0) return;
     wchar_t hexStr[2048] = {0};
     int pos = 0;
@@ -583,28 +592,27 @@ void append_echo_hex_dump(const BYTE *buf, DWORD len) {
     append_rx_text_colored(hexStr, HEX_ECHO_COLOR);
 }
 
-// ============================================================================
+// ====================================================================================================
 // RENDER_RX_BUFFER
-// ============================================================================
+// ====================================================================================================
+
 void render_rx_buffer(BOOL appendMode) {
     EnterCriticalSection(&g_csRx);
     if (g_rxRawLen == 0) { LeaveCriticalSection(&g_csRx); return; }
 
     UINT cp = get_selected_codepage();
     DWORD dataLen = g_rxRawLen;
-    
-    // В режиме DUMP всегда перерисовываем всё для синхронизации HEX и TEXT
+
     BOOL forceFullRedraw = (g_rxMode == RX_MODE_DUMP);
-    
     DWORD startIdx = (appendMode && !forceFullRedraw) ? g_lastRenderedLen : 0;
 
     if (forceFullRedraw || !appendMode) {
         if (g_hEditRx) SetWindowTextW(g_hEditRx, L"");
         startIdx = 0;
     } else {
-        if (startIdx >= dataLen) { 
-            LeaveCriticalSection(&g_csRx); 
-            return; 
+        if (startIdx >= dataLen) {
+            LeaveCriticalSection(&g_csRx);
+            return;
         }
     }
 
@@ -617,25 +625,20 @@ void render_rx_buffer(BOOL appendMode) {
             DWORD lineEnd = offset + DUMP_LINE_SIZE;
             if (lineEnd > dataLen) lineEnd = dataLen;
 
-            // Адрес строки
             wLen += swprintf(wBuf + wLen, 12, L"%08X: ", offset);
 
-            // HEX часть
             for (DWORD i = offset; i < lineEnd; i++) {
                 wLen += swprintf(wBuf + wLen, 4, L"%02X ", g_rxRawBuf[i]);
             }
-            // Добиваем пробелами до конца строки дампа
             for (DWORD i = lineEnd; i < offset + DUMP_LINE_SIZE; i++) {
                 wLen += swprintf(wBuf + wLen, 4, L"   ");
             }
-            
+
             wLen += swprintf(wBuf + wLen, 4, L" | ");
 
-            // ASCII/TEXT часть
             wchar_t asciiLine[DUMP_LINE_SIZE + 1] = {0};
             int charsConverted = 0;
             if (lineEnd > offset) {
-                // Используем флаг 0 вместо MB_ERR_INVALID_CHARS для поддержки всех байтов кодировки
                 charsConverted = MultiByteToWideChar(cp, 0,
                     (LPCSTR)(g_rxRawBuf + offset), lineEnd - offset, asciiLine, DUMP_LINE_SIZE);
             }
@@ -644,7 +647,6 @@ void render_rx_buffer(BOOL appendMode) {
                 wchar_t ch = L'.';
                 if (i < charsConverted) {
                     ch = asciiLine[i];
-                    // Фильтруем только управляющие символы (< 0x20)
                     if (ch < 0x20) ch = L'.';
                 }
                 wBuf[wLen++] = ch;
@@ -655,14 +657,12 @@ void render_rx_buffer(BOOL appendMode) {
         g_lastRenderedLen = dataLen;
 
     } else {
-        // Обычный текстовый режим
         DWORD bytesToRender = dataLen - startIdx;
         if (bytesToRender > 0) {
             int convertedLen = MultiByteToWideChar(cp, 0,
                 (LPCSTR)(g_rxRawBuf + startIdx), bytesToRender, wBuf, maxW);
-            
+
             if (convertedLen <= 0) {
-                // Fallback to HEX if conversion fails completely
                 for (DWORD i = 0; i < bytesToRender && wLen < maxW; i++)
                     wLen += swprintf(wBuf + wLen, 4, L"%02X ", g_rxRawBuf[startIdx + i]);
             } else {
@@ -681,10 +681,11 @@ void render_rx_buffer(BOOL appendMode) {
     }
 }
 
-// ============================================================================
-// ADD_TO_HISTORY И TXEDITSUBPROC
-// ============================================================================
-void add_to_history(const wchar_t *msg) {
+// ====================================================================================================
+// ADD_TO_HISTORY & TXEDITSUBPROC
+// ====================================================================================================
+
+void add_to_history(const wchar_t* msg) {
     if (!g_hComboTx || !msg || wcslen(msg) == 0) return;
     int idx = (int)SendMessageW(g_hComboTx, CB_FINDSTRINGEXACT, (WPARAM)-1, (LPARAM)msg);
     if (idx != CB_ERR) SendMessageW(g_hComboTx, CB_DELETESTRING, (WPARAM)idx, 0);
@@ -704,10 +705,11 @@ LRESULT CALLBACK TxEditSubProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return CallWindowProcW(g_pfnOrigEditProc, hwnd, msg, wp, lp);
 }
 
-// ============================================================================
+// ====================================================================================================
 // PARSE_TEXT_WITH_INLINE_HEX
-// ============================================================================
-DWORD parse_text_with_inline_hex(const wchar_t *src, BYTE *dst, DWORD dstMax, UINT codepage) {
+// ====================================================================================================
+
+DWORD parse_text_with_inline_hex(const wchar_t* src, BYTE* dst, DWORD dstMax, UINT codepage) {
     if (!src || !dst || dstMax == 0) return 0;
     DWORD binLen = 0;
     size_t len = wcslen(src);
@@ -763,9 +765,10 @@ DWORD parse_text_with_inline_hex(const wchar_t *src, BYTE *dst, DWORD dstMax, UI
     return binLen;
 }
 
-// ============================================================================
+// ====================================================================================================
 // COM_SEND_UI
-// ============================================================================
+// ====================================================================================================
+
 void com_send_ui(HWND hwndParent) {
     if (g_hPort == INVALID_HANDLE_VALUE) return;
 
@@ -773,7 +776,7 @@ void com_send_ui(HWND hwndParent) {
     GetWindowTextW(g_hComboTx, g_wTxtBuf, 1023);
     size_t len = wcslen(g_wTxtBuf);
     if (len == 0) {
-        MessageBoxW(hwndParent, L"Нет данных для отправки!", L"Внимание", MB_ICONWARNING|MB_OK);
+        MessageBoxW(hwndParent, L"Нет данных для отправки!", L"Ошибка", MB_ICONWARNING|MB_OK);
         return;
     }
 
@@ -805,7 +808,7 @@ void com_send_ui(HWND hwndParent) {
     }
 
     if (binLen == 0) {
-        MessageBoxW(hwndParent, L"Нет данных для отправки!\nПроверьте режим (TEXT/HEX) и кодировку.", L"Ошибка", MB_ICONERROR|MB_OK);
+        MessageBoxW(hwndParent, L"Нет данных для отправки!\r\nПроверьте режим (TEXT/HEX) и кодировку.", L"Ошибка", MB_ICONERROR|MB_OK);
         return;
     }
 
@@ -863,9 +866,10 @@ void com_send_ui(HWND hwndParent) {
     SendMessageW(g_hComboTx, CB_SETEDITSEL, 0, MAKELPARAM(0, -1));
 }
 
-// ============================================================================
-// ПОТОКИ RX/TX
-// ============================================================================
+// ====================================================================================================
+// Потоки RX/TX
+// ====================================================================================================
+
 void StartRxTxThreads(HWND hwndTerm) {
     if (!g_hRxStopEvent) g_hRxStopEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
     if (!g_hTxStopEvent) g_hTxStopEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
@@ -1007,21 +1011,21 @@ void DoAutoSendTick(HWND hwndTerm) {
     }
 }
 
-// ============================================================================
-// USB И COM-ПОРТЫ
-// ============================================================================
-void get_advanced_usb_descriptors(HDEVINFO hDevInfo, SP_DEVINFO_DATA *pDevInfo, const wchar_t *instanceId,
-    wchar_t *outVid, wchar_t *outPid, wchar_t *outSerial,
-    wchar_t *outMfg, wchar_t *outProduct, wchar_t *outRawSerial, wchar_t *outCdcInfo) {
-    
+// ====================================================================================================
+// USB descriptors & COM search
+// ====================================================================================================
+
+void get_advanced_usb_descriptors(HDEVINFO hDevInfo, SP_DEVINFO_DATA* pDevInfo, const wchar_t* instanceId,
+                                  wchar_t* outVid, wchar_t* outPid, wchar_t* outSerial,
+                                  wchar_t* outMfg, wchar_t* outProduct, wchar_t* outRawSerial, wchar_t* outCdcInfo) {
     wcscpy(outVid, L"N/A"); wcscpy(outPid, L"N/A"); wcscpy(outSerial, L"N/A");
     wcscpy(outMfg, L"N/A"); wcscpy(outProduct, L"N/A"); wcscpy(outRawSerial, L"N/A");
     wcscpy(outCdcInfo, L"N/A (Standard Serial)");
 
     if (instanceId) {
-        const wchar_t *pVid = wcsstr(instanceId, L"VID_"); if (pVid) { wcsncpy(outVid, pVid + 4, 4); outVid[4] = L'\0'; }
-        const wchar_t *pPid = wcsstr(instanceId, L"PID_"); if (pPid) { wcsncpy(outPid, pPid + 4, 4); outPid[4] = L'\0'; }
-        const wchar_t *pSlash = wcsrchr(instanceId, L'\\'); if (pSlash) { wcsncpy(outSerial, pSlash + 1, 63); outSerial[63] = L'\0'; }
+        const wchar_t* pVid = wcsstr(instanceId, L"VID_"); if (pVid) { wcsncpy(outVid, pVid + 4, 4); outVid[4] = L'\0'; }
+        const wchar_t* pPid = wcsstr(instanceId, L"PID_"); if (pPid) { wcsncpy(outPid, pPid + 4, 4); outPid[4] = L'\0'; }
+        const wchar_t* pSlash = wcsrchr(instanceId, L'\\'); if (pSlash) { wcsncpy(outSerial, pSlash + 1, 63); outSerial[63] = L'\0'; }
     }
 
     static const GUID GUID_DEVINTERFACE_USB_DEVICE = {0xA5DCBF10,0x6530,0x11D2,{0x90,0x1F,0x00,0xC0,0x4F,0xB9,0x51,0xED}};
@@ -1033,43 +1037,64 @@ void get_advanced_usb_descriptors(HDEVINFO hDevInfo, SP_DEVINFO_DATA *pDevInfo, 
             if (!SetupDiEnumDeviceInfo(hUsbInfo, index, &usbDevData)) break;
             ZeroMemory(g_usbInstanceId, sizeof(g_usbInstanceId));
             if (SetupDiGetDeviceInstanceIdW(hUsbInfo, &usbDevData, g_usbInstanceId, 512, NULL)) {
-                const wchar_t *pPV = wcsstr(g_usbInstanceId, L"VID_");
-                const wchar_t *pPP = wcsstr(g_usbInstanceId, L"PID_");
+                const wchar_t* pPV = wcsstr(g_usbInstanceId, L"VID_");
+                const wchar_t* pPP = wcsstr(g_usbInstanceId, L"PID_");
                 if (pPV && pPP && wcsncmp(pPV+4, outVid, 4)==0 && wcsncmp(pPP+4, outPid, 4)==0) {
-                    const wchar_t *pLS = wcsrchr(g_usbInstanceId, L'\\');
+                    const wchar_t* pLS = wcsrchr(g_usbInstanceId, L'\\');
                     if (pLS) { wcsncpy(outRawSerial, pLS+1, 127); outRawSerial[127]=L'\0'; }
-                    
+
                     HKEY hUsbKey = SetupDiOpenDevRegKey(hUsbInfo, &usbDevData, DICS_FLAG_GLOBAL, 0, DIREG_DEV, KEY_READ);
-                    if (hUsbKey != INVALID_HANDLE_VALUE) {
-                        DWORD cb = sizeof(g_regBuffer);
-                        if (RegQueryValueExW(hUsbKey, L"busi_ManufacturerString", NULL, NULL, (LPBYTE)g_regBuffer, &cb)==ERROR_SUCCESS && wcslen(g_regBuffer) >0)
-                            { wcsncpy(outMfg, g_regBuffer, 127); outMfg[127]=L'\0'; }
-                        else { cb=sizeof(g_regBuffer);
-                            if (RegQueryValueExW(hUsbKey, L"UIParentMFG", NULL, NULL, (LPBYTE)g_regBuffer, &cb)==ERROR_SUCCESS && wcslen(g_regBuffer) >0)
-                                { wcsncpy(outMfg, g_regBuffer, 127); outMfg[127]=L'\0'; }
-                            else { DWORD sz=0;
-                                if (SetupDiGetDeviceRegistryPropertyW(hUsbInfo, &usbDevData, SPDRP_MFG, NULL, (PBYTE)g_regBuffer, sizeof(g_regBuffer), &sz)) {
-                                    if (!wcsstr(g_regBuffer, L"Майкрософт") && !wcsstr(g_regBuffer, L"хост"))
-                                        { wcsncpy(outMfg, g_regBuffer, 127); outMfg[127]=L'\0'; }
-                                    else wcscpy(outMfg, L"PLANAR-S0");
-                                }
-                            }
-                        }
-                        
-                        cb=sizeof(g_regBuffer);
-                        if (RegQueryValueExW(hUsbKey, L"busi_ProductString", NULL, NULL, (LPBYTE)g_regBuffer, &cb)==ERROR_SUCCESS && wcslen(g_regBuffer) >0)
-                            { wcsncpy(outProduct, g_regBuffer, 127); outProduct[127]=L'\0'; }
-                        else { DWORD sz=0;
-                            if (SetupDiGetDeviceRegistryPropertyW(hUsbInfo, &usbDevData, 24, NULL, (PBYTE)g_regBuffer, sizeof(g_regBuffer), &sz) && wcslen(g_regBuffer) >0)
-                                { wcsncpy(outProduct, g_regBuffer, 127); outProduct[127]=L'\0'; }
-                            else { if (SetupDiGetDeviceRegistryPropertyW(hUsbInfo, &usbDevData, SPDRP_DEVICEDESC, NULL, (PBYTE)g_regBuffer, sizeof(g_regBuffer), &sz)) {
-                                if (!wcsstr(g_regBuffer, L"Составное"))
-                                    { wcsncpy(outProduct, g_regBuffer, 127); outProduct[127]=L'\0'; }
-                                else wcscpy(outProduct, L"SSI-ABZ");
-                            }}
-                        }
-                        RegCloseKey(hUsbKey);
+    if (hUsbKey != INVALID_HANDLE_VALUE) {
+        DWORD cb = sizeof(g_regBuffer);
+        
+        // === MFG ===
+        // 1. Пытаемся прочитать кастомную строку производителя
+        if (RegQueryValueExW(hUsbKey, L"busi_ManufacturerString", NULL, NULL, (LPBYTE)g_regBuffer, &cb) == ERROR_SUCCESS && wcslen(g_regBuffer) > 0) {
+            wcsncpy(outMfg, g_regBuffer, 127); outMfg[127] = L'\0';
+        } else {
+            // 2. Фолбэк на UI Parent MFG
+            cb = sizeof(g_regBuffer);
+            if (RegQueryValueExW(hUsbKey, L"UIParentMFG", NULL, NULL, (LPBYTE)g_regBuffer, &cb) == ERROR_SUCCESS && wcslen(g_regBuffer) > 0) {
+                wcsncpy(outMfg, g_regBuffer, 127); outMfg[127] = L'\0';
+            } else {
+                // 3. Фолбэк на SPDRP_MFG с фильтрацией
+                DWORD sz = 0;
+                if (SetupDiGetDeviceRegistryPropertyW(hUsbInfo, &usbDevData, SPDRP_MFG, NULL, (PBYTE)g_regBuffer, sizeof(g_regBuffer), &sz)) {
+                    // Фильтруем системные заглушки
+                    if (!wcsstr(g_regBuffer, L"Майкрософт") && !wcsstr(g_regBuffer, L"хост") && !wcsstr(g_regBuffer, L"(Стандартный")) {
+                        wcsncpy(outMfg, g_regBuffer, 127); outMfg[127] = L'\0';
+                    } else {
+                        wcscpy(outMfg, L"PLANAR-S0");
                     }
+                }
+            }
+        }
+
+        // === PRODUCT ===
+        cb = sizeof(g_regBuffer);
+        // 1. Пытаемся прочитать кастомную строку продукта
+        if (RegQueryValueExW(hUsbKey, L"busi_ProductString", NULL, NULL, (LPBYTE)g_regBuffer, &cb) == ERROR_SUCCESS && wcslen(g_regBuffer) > 0) {
+            wcsncpy(outProduct, g_regBuffer, 127); outProduct[127] = L'\0';
+        } else {
+            // 2. Фолбэк на свойство 24 (Device Description из USB дескриптора)
+            DWORD sz = 0;
+            if (SetupDiGetDeviceRegistryPropertyW(hUsbInfo, &usbDevData, 24, NULL, (PBYTE)g_regBuffer, sizeof(g_regBuffer), &sz) && wcslen(g_regBuffer) > 0) {
+                wcsncpy(outProduct, g_regBuffer, 127); outProduct[127] = L'\0';
+            } else {
+                // 3. Фолбэк на SPDRP_DEVICEDESC с фильтрацией
+                if (SetupDiGetDeviceRegistryPropertyW(hUsbInfo, &usbDevData, SPDRP_DEVICEDESC, NULL, (PBYTE)g_regBuffer, sizeof(g_regBuffer), &sz)) {
+                    // Фильтруем системные заглушки
+                    if (!wcsstr(g_regBuffer, L"Составное") && !wcsstr(g_regBuffer, L"Composite")) {
+                        wcsncpy(outProduct, g_regBuffer, 127); outProduct[127] = L'\0';
+                    } else {
+                        wcscpy(outProduct, L"SSI-ABZ");
+                    }
+                }
+            }
+        }
+
+        RegCloseKey(hUsbKey);
+    }
                     break;
                 }
             }
@@ -1093,16 +1118,13 @@ LRESULT CALLBACK InfoWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_CREATE: {
             RECT rc; GetClientRect(hwnd, &rc);
             hEditLog = CreateWindowExW(0, L"EDIT", L"", WS_CHILD|WS_VISIBLE|WS_VSCROLL|ES_MULTILINE|ES_READONLY|ES_AUTOVSCROLL,
-                0, 0, rc.right, rc.bottom, hwnd, NULL, GetModuleHandle(NULL), NULL);
+                                       0, 0, rc.right, rc.bottom, hwnd, NULL, GetModuleHandle(NULL), NULL);
             SendMessage(hEditLog, WM_SETFONT, (WPARAM)g_hMonoFont, TRUE);
-            CREATESTRUCTW *pCreate = (CREATESTRUCTW*)lp;
+            CREATESTRUCTW* pCreate = (CREATESTRUCTW*)lp;
             if (pCreate && pCreate->lpCreateParams) SetWindowTextW(hEditLog, (const wchar_t*)pCreate->lpCreateParams);
             return 0;
         }
-        case WM_SIZE: {
-            if (hEditLog) { MoveWindow(hEditLog, 0, 0, LOWORD(lp), HIWORD(lp), TRUE); InvalidateRect(hEditLog, NULL, TRUE); }
-            return 0;
-        }
+        case WM_SIZE: { if (hEditLog) { MoveWindow(hEditLog, 0, 0, LOWORD(lp), HIWORD(lp), TRUE); InvalidateRect(hEditLog, NULL, TRUE); } return 0; }
         case WM_CLOSE: { DestroyWindow(hwnd); return 0; }
         case WM_CTLCOLOREDIT: case WM_CTLCOLORSTATIC: {
             HDC hdc = (HDC)wp; SetBkColor(hdc, g_pTheme->editBg); SetTextColor(hdc, g_pTheme->editFg);
@@ -1118,12 +1140,12 @@ LRESULT CALLBACK InfoWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 void show_about_dialog(HWND hParent) {
     HWND hInfo = CreateWindowExW(WS_EX_TOOLWINDOW, L"WT232_Info_Scroll_Class", L"О программе",
-        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 480, 520,
-        hParent, NULL, GetModuleHandle(NULL), (LPVOID)g_aboutText);
+                                 WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 480, 520,
+                                 hParent, NULL, GetModuleHandle(NULL), (LPVOID)g_aboutText);
     if (hInfo) { ShowWindow(hInfo, SW_SHOW); UpdateWindow(hInfo); ApplyThemeToWindow(hInfo); }
 }
 
-void init_com_ports(HWND hwndParent, BOOL showDetails, const wchar_t *saveTargetName) {
+void init_com_ports(HWND hwndParent, BOOL showDetails, const wchar_t* saveTargetName) {
     if (!g_hComboPort) return;
     if (!showDetails) SendMessage(g_hComboPort, CB_RESETCONTENT, 0, 0);
 
@@ -1143,10 +1165,10 @@ void init_com_ports(HWND hwndParent, BOOL showDetails, const wchar_t *saveTarget
         BOOL hasId = SetupDiGetDeviceInstanceIdW(hDevInfo, &devInfo, iid, sizeof(iid)/sizeof(wchar_t), &sz);
 
         if (hasName && hasId) {
-            wchar_t *pStart = wcsstr(fn, L"(COM"); if (!pStart) pStart = wcsstr(fn, L" (COM");
+            wchar_t* pStart = wcsstr(fn, L"(COM"); if (!pStart) pStart = wcsstr(fn, L" (COM");
             if (pStart) {
                 if (*pStart == L' ') pStart++; pStart++;
-                wchar_t *pEnd = wcschr(pStart, L')');
+                wchar_t* pEnd = wcschr(pStart, L')');
                 if (pEnd) {
                     size_t len = (size_t)(pEnd - pStart);
                     if (len < MAX_PORT_NAME) {
@@ -1163,8 +1185,8 @@ void init_com_ports(HWND hwndParent, BOOL showDetails, const wchar_t *saveTarget
 
                         if (showDetails) {
                             size_t w = swprintf(g_infoReport+reportPos, (sizeof(g_infoReport)/sizeof(wchar_t))-reportPos,
-                                L"Порт: %ls\r\nИмя: %ls\r\nVID: %ls | PID: %ls\r\nSerial: %ls\r\nMfg: %ls\r\nProduct: %ls\r\nRaw S/N: %ls\r\nClass: %ls\r\n--------------------------------------------------\r\n\r\n",
-                                sn, fn, cv, cp, cs, cm, cpr, cr, cc);
+                                                L"Порт: %ls\r\nМетка: %ls\r\nVID: %ls | PID: %ls\r\nSerial: %ls\r\nMfg: %ls\r\nProduct: %ls\r\nRaw S/N: %ls\r\nClass: %ls\r\n-----------------------------------------\r\n\r\n",
+                                                sn, fn, cv, cp, cs, cm, cpr, cr, cc);
                             if (w > 0) reportPos += w;
                         }
                     }
@@ -1189,14 +1211,14 @@ void init_com_ports(HWND hwndParent, BOOL showDetails, const wchar_t *saveTarget
         if (portsFoundCount == 0) MessageBoxW(hwndParent, L"Активные COM-порты не найдены!", L"Инфо", MB_ICONINFORMATION|MB_OK);
         else {
             HWND hInfo = CreateWindowExW(WS_EX_TOOLWINDOW, L"WT232_Info_Scroll_Class", L"Список устройств",
-                WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 460, 360,
-                hwndParent, NULL, GetModuleHandle(NULL), (LPVOID)g_infoReport);
+                                         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 460, 360,
+                                         hwndParent, NULL, GetModuleHandle(NULL), (LPVOID)g_infoReport);
             if (hInfo) { ShowWindow(hInfo, SW_SHOW); UpdateWindow(hInfo); ApplyThemeToWindow(hInfo); }
         }
     }
 }
 
-void check_and_reconnect_search(wchar_t *outFoundPortName, BOOL *pIsFound) {
+void check_and_reconnect_search(wchar_t* outFoundPortName, BOOL* pIsFound) {
     *pIsFound = FALSE;
     static const GUID GUID_DEVCLASS_PORTS = {0x4D36E978,0xE325,0x11CE,{0xBF,0xC1,0x08,0x00,0x2B,0xE1,0x03,0x18}};
     HDEVINFO hDevInfo = SetupDiGetClassDevsW(&GUID_DEVCLASS_PORTS, NULL, NULL, DIGCF_PRESENT);
@@ -1210,17 +1232,17 @@ void check_and_reconnect_search(wchar_t *outFoundPortName, BOOL *pIsFound) {
         wchar_t fn[256]={0}, iid[256]={0}; DWORD sz=0;
         if (SetupDiGetDeviceRegistryPropertyW(hDevInfo, &devInfo, SPDRP_FRIENDLYNAME, NULL, (PBYTE)fn, sizeof(fn), &sz) &&
             SetupDiGetDeviceInstanceIdW(hDevInfo, &devInfo, iid, sizeof(iid)/sizeof(wchar_t), &sz)) {
-            
+
             wchar_t cv[16],cp[16],cs[64],dm[128],dp[128],dr[128],dc[128];
             get_advanced_usb_descriptors(hDevInfo, &devInfo, iid, cv,cp,cs,dm,dp,dr,dc);
 
             if (wcscmp(cv, g_session.targetDevice.vid)==0 && wcscmp(cp, g_session.targetDevice.pid)==0 &&
                 wcscmp(cs, g_session.targetDevice.serial)==0) {
-                
-                wchar_t *pS = wcsstr(fn, L"(COM"); if (!pS) pS = wcsstr(fn, L" (COM");
+
+                wchar_t* pS = wcsstr(fn, L"(COM"); if (!pS) pS = wcsstr(fn, L" (COM");
                 if (pS) {
                     if (*pS == L' ') pS++; pS++;
-                    wchar_t *pE = wcschr(pS, L')');
+                    wchar_t* pE = wcschr(pS, L')');
                     if (pE) { size_t l = (size_t)(pE - pS); wcsncpy(outFoundPortName, pS, l); outFoundPortName[l]=L'\0'; *pIsFound = TRUE; break; }
                 }
             }
@@ -1230,9 +1252,10 @@ void check_and_reconnect_search(wchar_t *outFoundPortName, BOOL *pIsFound) {
     SetupDiDestroyDeviceInfoList(hDevInfo);
 }
 
-// ============================================================================
-// СКРИПТЫ И МАКРОСЫ
-// ============================================================================
+// ====================================================================================================
+// Scripts
+// ====================================================================================================
+
 void LoadScriptFile(const wchar_t* path) {
     FILE* f = _wfopen(path, L"r"); if (!f) return;
     g_scriptCount = 0; g_scriptHasStopMarker = FALSE;
@@ -1248,7 +1271,7 @@ void LoadScriptFile(const wchar_t* path) {
             if (*endPtr == L'\0' && val >= 0) { defaultDelay = (DWORD)val; firstLine = FALSE; continue; }
             firstLine = FALSE;
         }
-        if (wcsncmp(line, L"#DELAY ", 6) == 0) { wchar_t *numPart = line + 6; while (*numPart == L' ') numPart++; defaultDelay = _wtol(numPart); continue; }
+        if (wcsncmp(line, L"#DELAY ", 6) == 0) { wchar_t* numPart = line + 6; while (*numPart == L' ') numPart++; defaultDelay = _wtol(numPart); continue; }
         if (wcscmp(line, L"#STOP") == 0) { g_scriptHasStopMarker = TRUE; continue; }
         if (line[0] == L'#') continue;
 
@@ -1281,16 +1304,20 @@ void RunNextScriptCommand(void) {
     SetTimer(g_hwndTerminal, TIMER_SCRIPT_ID, delay, NULL);
 }
 
-void GetMacroScriptPath(int bankIndex, wchar_t *outPath, int maxLen) {
+// ====================================================================================================
+// Macro System
+// ====================================================================================================
+
+void GetMacroScriptPath(int bankIndex, wchar_t* outPath, int maxLen) {
     outPath[0] = L'\0';
     if (bankIndex < 0 || bankIndex >= MACRO_BANK_COUNT) return;
     if (wcslen(g_macroBankTitles[bankIndex]) == 0) return;
     GetModuleFileNameW(NULL, outPath, maxLen);
-    wchar_t *pSlash = wcsrchr(outPath, L'\\'); if (pSlash) *(pSlash + 1) = L'\0';
+    wchar_t* pSlash = wcsrchr(outPath, L'\\'); if (pSlash) *(pSlash + 1) = L'\0';
     wcscat(outPath, g_macroBankTitles[bankIndex]); wcscat(outPath, L".txt");
 }
 
-void LoadMacroScript(int bankIndex, const wchar_t *path) {
+void LoadMacroScript(int bankIndex, const wchar_t* path) {
     if (bankIndex < 0 || bankIndex >= MACRO_BANK_COUNT) return;
     FILE* f = _wfopen(path, L"r"); if (!f) return;
     g_macroScriptCount[bankIndex] = 0; g_macroScriptHasStop[bankIndex] = FALSE;
@@ -1306,7 +1333,7 @@ void LoadMacroScript(int bankIndex, const wchar_t *path) {
             if (*endPtr == L'\0' && val >= 0) { defaultDelay = (DWORD)val; firstLine = FALSE; continue; }
             firstLine = FALSE;
         }
-        if (wcsncmp(line, L"#DELAY ", 6) == 0) { wchar_t *numPart = line + 6; while (*numPart == L' ') numPart++; defaultDelay = _wtol(numPart); continue; }
+        if (wcsncmp(line, L"#DELAY ", 6) == 0) { wchar_t* numPart = line + 6; while (*numPart == L' ') numPart++; defaultDelay = _wtol(numPart); continue; }
         if (wcscmp(line, L"#STOP") == 0) { g_macroScriptHasStop[bankIndex] = TRUE; continue; }
         if (line[0] == L'#') continue;
 
@@ -1344,19 +1371,19 @@ void RunNextMacroScriptCommand(int bankIndex) {
         BOOL ok = WriteFile(g_hPort, binBuf, binLen, &written, &ovWrite);
         if (!ok) {
             DWORD err = GetLastError();
-            if (err == ERROR_IO_PENDING) { WaitForSingleObject(ovWrite.hEvent, 5000); GetOverlappedResult(g_hPort, &ovWrite, &written, FALSE); }
+            if (err == ERROR_IO_PENDING) { WaitForSingleObject(ovWrite.hEvent, 5000); GetOverlappedResult(g_hPort, &ovWrite, &written, FALSE); ok = TRUE; }
         }
         if (ovWrite.hEvent) CloseHandle(ovWrite.hEvent);
         LeaveCriticalSection(&g_csComm);
 
-        if (is_echo_enabled() && g_hwndTerminal) {
-            wchar_t echoMsg[MAX_LINE_LEN + 4]; swprintf(echoMsg, sizeof(echoMsg)/sizeof(wchar_t), L"%ls", cmd);
-            append_echo_text(echoMsg);
-            if (is_tx_hex_echo_enabled()) {
-                append_echo_hex_dump(binBuf, binLen);
+        if (ok) {
+            if (is_echo_enabled() && g_hwndTerminal) {
+                wchar_t echoMsg[MAX_LINE_LEN + 4]; swprintf(echoMsg, sizeof(echoMsg)/sizeof(wchar_t), L"%ls", cmd);
+                append_echo_text(echoMsg);
+                if (is_tx_hex_echo_enabled()) { append_echo_hex_dump(binBuf, binLen); }
+                append_echo_text(L"\r\n");
             }
-            append_echo_text(L"\r\n");
-        }
+        } else { MessageBoxW(g_hwndMacroPads[bankIndex], L"Ошибка отправки!", L"Ошибка", MB_ICONERROR | MB_OK); }
     }
 
     g_macroScriptIndex[bankIndex]++;
@@ -1425,7 +1452,7 @@ void SaveMacroPadPosition(int bankIndex, int x, int y) {
     WriteIniInt(section, L"X", x); WriteIniInt(section, L"Y", y);
 }
 
-void LoadMacroPadPosition(int bankIndex, int *px, int *py) {
+void LoadMacroPadPosition(int bankIndex, int* px, int* py) {
     if (bankIndex < 0 || bankIndex >= MACRO_BANK_COUNT) return;
     wchar_t section[32]; swprintf(section, 32, L"MacroPos_%d", bankIndex);
     *px = ReadIniInt(section, L"X", -1); *py = ReadIniInt(section, L"Y", -1);
@@ -1435,7 +1462,7 @@ void SendMacroCommand(int bankIndex, int slotIndex) {
     if (bankIndex < 0 || bankIndex >= MACRO_BANK_COUNT || slotIndex < 0 || slotIndex >= MACROS_PER_BANK) return;
     if (g_hPort == INVALID_HANDLE_VALUE) { MessageBoxW(g_hwndMacroPads[bankIndex], L"Порт не открыт!", L"Ошибка", MB_ICONWARNING | MB_OK); return; }
 
-    MacroSlot *slot = &g_macroBanks[bankIndex][slotIndex];
+    MacroSlot* slot = &g_macroBanks[bankIndex][slotIndex];
     if (wcslen(slot->command) == 0) return;
 
     BYTE binBuf[1024]; UINT cp = get_selected_codepage();
@@ -1457,9 +1484,7 @@ void SendMacroCommand(int bankIndex, int slotIndex) {
             if (is_echo_enabled() && g_hwndTerminal) {
                 wchar_t echoMsg[MACRO_CMD_LEN + 4]; swprintf(echoMsg, sizeof(echoMsg)/sizeof(wchar_t), L"%ls", slot->command);
                 append_echo_text(echoMsg);
-                if (is_tx_hex_echo_enabled()) {
-                    append_echo_hex_dump(binBuf, binLen);
-                }
+                if (is_tx_hex_echo_enabled()) { append_echo_hex_dump(binBuf, binLen); }
                 append_echo_text(L"\r\n");
             }
         } else { MessageBoxW(g_hwndMacroPads[bankIndex], L"Ошибка отправки!", L"Ошибка", MB_ICONERROR | MB_OK); }
@@ -1514,9 +1539,10 @@ void SaveAllMacroWindowsState(void) {
 
 void ResetMacroLoadedFlags(void) { for (int i = 0; i < MACRO_BANK_COUNT; i++) g_macroBankLoaded[i] = FALSE; }
 
-// ============================================================================
-// ОКНА МАКРОСОВ
-// ============================================================================
+// ====================================================================================================
+// Theme
+// ====================================================================================================
+
 void ApplyThemeToWindow(HWND hwnd) {
     if (!hwnd || !IsWindow(hwnd)) return;
     static HBRUSH hBrush = NULL; if (!hBrush) hBrush = CreateSolidBrush(g_pTheme->bgColor);
@@ -1537,25 +1563,29 @@ BOOL CALLBACK ApplyThemeCallback(HWND hWndChild, LPARAM lParam) {
     return TRUE;
 }
 
+// ====================================================================================================
+// Macro Edit Window
+// ====================================================================================================
+
 LRESULT CALLBACK MacroEditWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    MacroEditCtx *ctx = (MacroEditCtx *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    MacroEditCtx* ctx = (MacroEditCtx*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     switch (msg) {
         case WM_CREATE: {
-            CREATESTRUCTW *cs = (CREATESTRUCTW *)lp; int *params = (int *)cs->lpCreateParams;
-            ctx = (MacroEditCtx *)calloc(1, sizeof(MacroEditCtx)); if (!ctx) return -1;
+            CREATESTRUCTW* cs = (CREATESTRUCTW*)lp; int* params = (int*)cs->lpCreateParams;
+            ctx = (MacroEditCtx*)calloc(1, sizeof(MacroEditCtx)); if (!ctx) return -1;
             ctx->bankIndex = params[0]; ctx->slotIndex = params[1];
             SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)ctx);
 
             CreateWindowExW(0, L"STATIC", L"Name:", WS_CHILD | WS_VISIBLE | SS_LEFT, 10, 14, 45, 20, hwnd, NULL, NULL, NULL);
             ctx->hEditName = CreateWindowExW(0, L"EDIT", g_macroBanks[ctx->bankIndex][ctx->slotIndex].label,
-                WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
-                60, 12, 220, 22, hwnd, (HMENU)IDC_EDIT_MACRO_NAME, NULL, NULL);
+                                             WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
+                                             60, 12, 220, 22, hwnd, (HMENU)IDC_EDIT_MACRO_NAME, NULL, NULL);
             SendMessage(ctx->hEditName, WM_SETFONT, (WPARAM)g_hEditFont, TRUE);
 
             CreateWindowExW(0, L"STATIC", L"CMD:", WS_CHILD | WS_VISIBLE | SS_LEFT, 10, 46, 40, 20, hwnd, NULL, NULL, NULL);
             ctx->hEditCmd = CreateWindowExW(0, L"EDIT", g_macroBanks[ctx->bankIndex][ctx->slotIndex].command,
-                WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
-                65, 44, 215, 22, hwnd, (HMENU)IDC_EDIT_MACRO_CMD, NULL, NULL);
+                                            WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
+                                            65, 44, 215, 22, hwnd, (HMENU)IDC_EDIT_MACRO_CMD, NULL, NULL);
             SendMessage(ctx->hEditCmd, WM_SETFONT, (WPARAM)g_hEditFont, TRUE);
 
             ctx->hBtnSave = CreateWindowExW(0, L"BUTTON", L"Save", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON | WS_TABSTOP, 110, 85, 70, 25, hwnd, (HMENU)IDC_BTN_MACRO_SAVE, NULL, NULL);
@@ -1607,8 +1637,8 @@ void ShowMacroEditWindow(HWND hParent, int bankIndex, int slotIndex) {
     if (x + w > screenW) x = screenW - w - 10; if (y + h > screenH) y = screenH - h - 10; if (y < 0) y = 0;
 
     g_hwndMacroEdit = CreateWindowExW(WS_EX_TOOLWINDOW, L"WT232_MacroEdit_Class", L"Edit Macro",
-        WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX | WS_CLIPCHILDREN,
-        x, y, w, h, hParent, NULL, GetModuleHandle(NULL), (LPVOID)params);
+                                      WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX | WS_CLIPCHILDREN,
+                                      x, y, w, h, hParent, NULL, GetModuleHandle(NULL), (LPVOID)params);
     if (g_hwndMacroEdit) { ShowWindow(g_hwndMacroEdit, SW_SHOW); UpdateWindow(g_hwndMacroEdit); SetForegroundWindow(g_hwndMacroEdit); }
 }
 
@@ -1663,11 +1693,11 @@ void LayoutButtons(HWND hwnd) {
 }
 
 LRESULT CALLBACK MacroPadWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    MacroPadCtx *ctx = (MacroPadCtx *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    MacroPadCtx* ctx = (MacroPadCtx*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     switch (msg) {
         case WM_CREATE: {
-            CREATESTRUCTW *cs = (CREATESTRUCTW *)lp; int bankIdx = (int)(LONG_PTR)cs->lpCreateParams;
-            ctx = (MacroPadCtx *)calloc(1, sizeof(MacroPadCtx)); if (!ctx) return -1;
+            CREATESTRUCTW* cs = (CREATESTRUCTW*)lp; int bankIdx = (int)(LONG_PTR)cs->lpCreateParams;
+            ctx = (MacroPadCtx*)calloc(1, sizeof(MacroPadCtx)); if (!ctx) return -1;
             ctx->bankIndex = bankIdx; SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)ctx);
 
             g_editMode = FALSE; LoadMacroBank(bankIdx);
@@ -1681,7 +1711,7 @@ LRESULT CALLBACK MacroPadWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             SendMessage(ctx->hModeBtn, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
             ctx->hDispBtn = CreateWindowExW(0, L"BUTTON", L"LABEL", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 60, 0, 55, 25, hwnd, (HMENU)IDC_BTN_MACRO_DISPLAY, NULL, NULL);
             SendMessage(ctx->hDispBtn, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
-            ctx->hStatusLbl = CreateWindowExW(0, L"STATIC", L" : RUN MODE ", WS_CHILD | WS_VISIBLE | SS_LEFT, 0, 0, 250, 16, hwnd, (HMENU)IDC_STATIC_MACRO_STATUS, NULL, NULL);
+            ctx->hStatusLbl = CreateWindowExW(0, L"STATIC", L"Режим: RUN MODE", WS_CHILD | WS_VISIBLE | SS_LEFT, 0, 0, 250, 16, hwnd, (HMENU)IDC_STATIC_MACRO_STATUS, NULL, NULL);
             SendMessage(ctx->hStatusLbl, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
 
             for (int i = 0; i < MACROS_PER_BANK; i++) {
@@ -1714,7 +1744,7 @@ LRESULT CALLBACK MacroPadWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_ERASEBKGND: { HDC hdc = (HDC)wp; RECT rc; GetClientRect(hwnd, &rc); static HBRUSH hBrush = NULL; if (!hBrush) hBrush = CreateSolidBrush(g_pTheme->bgColor); FillRect(hdc, &rc, hBrush); return 1; }
         case WM_MOVING: { if (!ctx) break; RECT rc; GetWindowRect(hwnd, &rc); if (ctx->bankIndex >= 0) SaveMacroPadPosition(ctx->bankIndex, rc.left, rc.top); return DefWindowProcW(hwnd, msg, wp, lp); }
         case WM_SIZE: { LayoutButtons(hwnd); return 0; }
-        case WM_GETMINMAXINFO: { MINMAXINFO *pMMI = (MINMAXINFO *)lp; pMMI->ptMinTrackSize.x = 310; pMMI->ptMinTrackSize.y = 340; return 0; }
+        case WM_GETMINMAXINFO: { MINMAXINFO* pMMI = (MINMAXINFO*)lp; pMMI->ptMinTrackSize.x = 310; pMMI->ptMinTrackSize.y = 340; return 0; }
         case WM_TIMER: { if (!ctx) break; if (wp == TIMER_MACRO_SCRIPT_ID) { if (g_hPort != INVALID_HANDLE_VALUE) RunNextMacroScriptCommand(ctx->bankIndex); else KillTimer(hwnd, TIMER_MACRO_SCRIPT_ID); } return 0; }
         case WM_CTLCOLORBTN: { HDC hdc = (HDC)wp; SetBkColor(hdc, g_pTheme->btnBg); SetTextColor(hdc, g_pTheme->btnFg); static HBRUSH hBrush = NULL; if (!hBrush) hBrush = CreateSolidBrush(g_pTheme->btnBg); return (LRESULT)hBrush; }
         case WM_CTLCOLOREDIT: { HDC hdc = (HDC)wp; SetBkColor(hdc, g_pTheme->editBg); SetTextColor(hdc, RGB(0,0,0)); static HBRUSH hBrush = NULL; if (!hBrush) hBrush = CreateSolidBrush(g_pTheme->editBg); return (LRESULT)hBrush; }
@@ -1723,42 +1753,23 @@ LRESULT CALLBACK MacroPadWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (!ctx) break;
             int id = LOWORD(wp);
 
-            // === ИСПРАВЛЕНИЕ: Обработка переключения режима RUN/EDIT ===
             if (id == IDC_BTN_MACRO_MODE) {
                 g_editMode = !g_editMode;
-
-                // Обновляем текст кнопки
                 SetWindowTextW(ctx->hModeBtn, g_editMode ? L"EDIT" : L"RUN");
                 InvalidateRect(ctx->hModeBtn, NULL, TRUE);
-
-                // Обновляем строку статуса
                 if (ctx->hStatusLbl) {
-                    SetWindowTextW(ctx->hStatusLbl, g_editMode ? L" : EDIT MODE " : L" : RUN MODE ");
+                    SetWindowTextW(ctx->hStatusLbl, g_editMode ? L"Режим: EDIT MODE" : L"Режим: RUN MODE");
                     InvalidateRect(ctx->hStatusLbl, NULL, TRUE);
                 }
-
-                // Управление доступностью поля заголовка банка
                 if (ctx->hTitleEdit) {
-                    if (g_editMode) {
-                        EnableWindow(ctx->hTitleEdit, TRUE);
-                        SetFocus(ctx->hTitleEdit);
-                        SendMessage(ctx->hTitleEdit, EM_SETSEL, 0, -1);
-                    } else {
-                        EnableWindow(ctx->hTitleEdit, FALSE);
-                        SendMessage(ctx->hTitleEdit, EM_SETSEL, 0, 0);
-                    }
-                    InvalidateRect(ctx->hTitleEdit, NULL, TRUE);
-                    UpdateWindow(ctx->hTitleEdit);
+                    if (g_editMode) { EnableWindow(ctx->hTitleEdit, TRUE); SetFocus(ctx->hTitleEdit); SendMessage(ctx->hTitleEdit, EM_SETSEL, 0, -1); }
+                    else { EnableWindow(ctx->hTitleEdit, FALSE); SendMessage(ctx->hTitleEdit, EM_SETSEL, 0, 0); }
+                    InvalidateRect(ctx->hTitleEdit, NULL, TRUE); UpdateWindow(ctx->hTitleEdit);
                 }
-
-                // При выходе из режима редактирования закрываем окно редактора макроса
-                if (!g_editMode && g_hwndMacroEdit) {
-                    CloseMacroEdit();
-                }
+                if (!g_editMode && g_hwndMacroEdit) { CloseMacroEdit(); }
                 return 0;
             }
 
-            // Переключение отображения LABEL/CMD
             if (id == IDC_BTN_MACRO_DISPLAY) {
                 g_showCommand = !g_showCommand;
                 SetWindowTextW(ctx->hDispBtn, g_showCommand ? L"CMD" : L"LABEL");
@@ -1767,52 +1778,42 @@ LRESULT CALLBACK MacroPadWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
 
-            // Нажатие на кнопки макросов
             if (id >= IDC_BTN_MACRO_BASE && id < IDC_BTN_MACRO_BASE + MACROS_PER_BANK) {
                 int slotIdx = id - IDC_BTN_MACRO_BASE;
-                if (g_editMode) {
-                    ShowMacroEditWindow(hwnd, ctx->bankIndex, slotIdx);
-                } else {
-                    SendMacroCommand(ctx->bankIndex, slotIdx);
-                }
+                if (g_editMode) { ShowMacroEditWindow(hwnd, ctx->bankIndex, slotIdx); }
+                else { SendMacroCommand(ctx->bankIndex, slotIdx); }
                 return 0;
             }
 
-            // Кнопка справки по скриптам
             if (id == IDC_MACRO_BTN_SCRIPT_INFO) {
                 static const wchar_t scriptHelp[] =
                     L"Справка по скриптам:\r\n"
-                    L"==========================================\r\n\r\n"
+                    L"=========================================\r\n\r\n"
                     L"Формат файла (.txt):\r\n"
                     L"Каждая строка - одна команда.\r\n"
                     L"Поддерживается инлайн-HEX (`XX`).\r\n\r\n"
                     L"Директивы:\r\n"
-                    L"1000      - Глобальная задержка (мс)\r\n"
+                    L"1000        - глобальная задержка (мс)\r\n"
                     L"(только в первой строке)\r\n"
-                    L"#DELAY 500 - Задержка перед след. командой\r\n"
-                    L"#STOP      - Остановить скрипт\r\n"
-                    L"#...       - Комментарий (игнорируется)\r\n\r\n"
+                    L"#DELAY 500  - задержка перед след. командой\r\n"
+                    L"#STOP       - остановить скрипт\r\n"
+                    L"#...        - комментарий (игнорируется)\r\n\r\n"
                     L"Без #STOP скрипт выполняется циклически.";
                 HWND hInfo = CreateWindowExW(WS_EX_TOOLWINDOW, L"WT232_Info_Scroll_Class",
-                    L"Справка: Скрипты", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-                    CW_USEDEFAULT, CW_USEDEFAULT, 380, 450,
-                    hwnd, NULL, GetModuleHandle(NULL), (LPVOID)scriptHelp);
+                                             L"Справка: Скрипты", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+                                             CW_USEDEFAULT, CW_USEDEFAULT, 380, 450,
+                                             hwnd, NULL, GetModuleHandle(NULL), (LPVOID)scriptHelp);
                 if (hInfo) { ShowWindow(hInfo, SW_SHOW); UpdateWindow(hInfo); ApplyThemeToWindow(hInfo); }
                 return 0;
             }
 
-            // Загрузка скрипта макроса
             if (id == IDC_MACRO_BTN_LOAD) {
-                OPENFILENAMEW ofn;
-                wchar_t szFile[MAX_PATH] = L"";
+                OPENFILENAMEW ofn; wchar_t szFile[MAX_PATH] = L"";
                 ZeroMemory(&ofn, sizeof(ofn));
-                ofn.lStructSize = sizeof(ofn);
-                ofn.hwndOwner = hwnd;
-                ofn.lpstrFile = szFile;
-                ofn.nMaxFile = MAX_PATH;
+                ofn.lStructSize = sizeof(ofn); ofn.hwndOwner = hwnd;
+                ofn.lpstrFile = szFile; ofn.nMaxFile = MAX_PATH;
                 ofn.lpstrFilter = L"Text Files (*.txt)\0*.txt\0All Files (*.*)\0*.*\0";
-                ofn.nFilterIndex = 1;
-                ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+                ofn.nFilterIndex = 1; ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
                 if (GetOpenFileNameW(&ofn)) {
                     LoadMacroScript(ctx->bankIndex, szFile);
                     SetWindowTextW(ctx->hScriptPath, szFile);
@@ -1821,33 +1822,24 @@ LRESULT CALLBACK MacroPadWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
 
-            // Запуск/Остановка скрипта макроса
             if (id == IDC_MACRO_BTN_RUN) {
-                if (g_macroScriptRunning[ctx->bankIndex]) {
-                    StopMacroScript(ctx->bankIndex);
-                } else {
+                if (g_macroScriptRunning[ctx->bankIndex]) { StopMacroScript(ctx->bankIndex); }
+                else {
                     if (g_macroScriptCount[ctx->bankIndex] > 0) {
                         g_macroScriptRunning[ctx->bankIndex] = TRUE;
                         UpdateMacroScriptUI(hwnd, ctx->bankIndex);
                         RunNextMacroScriptCommand(ctx->bankIndex);
-                    } else {
-                        MessageBoxW(hwnd, L"Сначала загрузите скрипт!", L"Внимание", MB_ICONWARNING | MB_OK);
-                    }
+                    } else { MessageBoxW(hwnd, L"Сначала загрузите скрипт!", L"Внимание", MB_ICONWARNING | MB_OK); }
                 }
                 return 0;
             }
 
-            // Редактирование скрипта (открытие в системном редакторе)
             if (id == IDC_MACRO_BTN_EDIT) {
-                wchar_t path[MAX_PATH];
-                GetMacroScriptPath(ctx->bankIndex, path, MAX_PATH);
-                if (wcslen(path) > 0) {
-                    ShellExecuteW(hwnd, L"open", path, NULL, NULL, SW_SHOWNORMAL);
-                }
+                wchar_t path[MAX_PATH]; GetMacroScriptPath(ctx->bankIndex, path, MAX_PATH);
+                if (wcslen(path) > 0) { ShellExecuteW(hwnd, L"open", path, NULL, NULL, SW_SHOWNORMAL); }
                 return 0;
             }
 
-            // Редактирование заголовка банка
             if (id == IDC_EDIT_MACRO_TITLE) {
                 if (HIWORD(wp) == EN_CHANGE && g_editMode) {
                     GetWindowTextW(ctx->hTitleEdit, g_macroBankTitles[ctx->bankIndex], MAX_MACRO_TITLE_LEN);
@@ -1867,8 +1859,9 @@ LRESULT CALLBACK MacroPadWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 void ShowMacroPad(HWND hParent, int bankIndex) {
     if (bankIndex < 0 || bankIndex >= MACRO_BANK_COUNT) return;
     if (g_hwndMacroPads[bankIndex] && IsWindow(g_hwndMacroPads[bankIndex])) { ShowWindow(g_hwndMacroPads[bankIndex], SW_SHOW); SetForegroundWindow(g_hwndMacroPads[bankIndex]); return; }
-    
+
     g_macroBankLoaded[bankIndex] = FALSE; g_editMode = FALSE;
+
     static BOOL classRegistered = FALSE;
     if (!classRegistered) {
         WNDCLASSW wc = {0}; wc.lpfnWndProc = MacroPadWndProc; wc.hInstance = GetModuleHandle(NULL);
@@ -1884,24 +1877,25 @@ void ShowMacroPad(HWND hParent, int bankIndex) {
 
     wchar_t title[64]; swprintf(title, 64, L"Macros M%d (RUN/EDIT | LABEL/CMD)", bankIndex + 1);
     g_hwndMacroPads[bankIndex] = CreateWindowExW(WS_EX_TOOLWINDOW, L"WT232_MacroPad_Class", title,
-        WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_THICKFRAME | WS_CLIPCHILDREN,
-        x, y, w, h, hParent, NULL, GetModuleHandle(NULL), (LPVOID)(LONG_PTR)bankIndex);
+                                                 WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_THICKFRAME | WS_CLIPCHILDREN,
+                                                 x, y, w, h, hParent, NULL, GetModuleHandle(NULL), (LPVOID)(LONG_PTR)bankIndex);
     if (g_hwndMacroPads[bankIndex]) { ShowWindow(g_hwndMacroPads[bankIndex], SW_SHOW); UpdateWindow(g_hwndMacroPads[bankIndex]); ApplyThemeToWindow(g_hwndMacroPads[bankIndex]); }
 }
 
-// ============================================================================
-// INI ФАЙЛ
-// ============================================================================
+// ====================================================================================================
+// INI
+// ====================================================================================================
+
 void InitIniPaths(void) {
     GetModuleFileNameW(NULL, g_iniPath, MAX_PATH);
-    wchar_t *pDot = wcsrchr(g_iniPath, L'.'); if (pDot) *pDot = L'\0';
+    wchar_t* pDot = wcsrchr(g_iniPath, L'.'); if (pDot) *pDot = L'\0';
     wcscat(g_iniPath, L".ini"); wcscpy(g_iniBackupPath, g_iniPath); wcscat(g_iniBackupPath, L".bak");
 }
 
-BOOL ReadIniString(const wchar_t *section, const wchar_t *key, wchar_t *out, int maxLen, const wchar_t *defVal) { DWORD res = GetPrivateProfileStringW(section, key, defVal, out, maxLen, g_iniPath); return (res > 0) ? TRUE : FALSE; }
-int ReadIniInt(const wchar_t *section, const wchar_t *key, int defVal) { return GetPrivateProfileIntW(section, key, defVal, g_iniPath); }
-void WriteIniString(const wchar_t *section, const wchar_t *key, const wchar_t *val) { WritePrivateProfileStringW(section, key, val, g_iniPath); }
-void WriteIniInt(const wchar_t *section, const wchar_t *key, int val) { wchar_t buf[32]; swprintf(buf, 32, L"%d", val); WritePrivateProfileStringW(section, key, buf, g_iniPath); }
+BOOL ReadIniString(const wchar_t* section, const wchar_t* key, wchar_t* out, int maxLen, const wchar_t* defVal) { DWORD res = GetPrivateProfileStringW(section, key, defVal, out, maxLen, g_iniPath); return (res > 0) ? TRUE : FALSE; }
+int ReadIniInt(const wchar_t* section, const wchar_t* key, int defVal) { return GetPrivateProfileIntW(section, key, defVal, g_iniPath); }
+void WriteIniString(const wchar_t* section, const wchar_t* key, const wchar_t* val) { WritePrivateProfileStringW(section, key, val, g_iniPath); }
+void WriteIniInt(const wchar_t* section, const wchar_t* key, int val) { wchar_t buf[32]; swprintf(buf, 32, L"%d", val); WritePrivateProfileStringW(section, key, buf, g_iniPath); }
 
 BOOL ValidateIni(void) { int baudrate = ReadIniInt(L"Port", L"LastBaudrate", -1); if (baudrate == -1) return FALSE; int width = ReadIniInt(L"Terminal", L"Width", -1); if (width == -1) return FALSE; return TRUE; }
 
@@ -1926,13 +1920,14 @@ void CreateDefaultIni(void) {
     WriteIniInt(L"Terminal", L"State", 1); WriteIniInt(L"Terminal", L"TxMode", 1);
     WriteIniInt(L"Terminal", L"RxMode", 0); WriteIniInt(L"Terminal", L"Echo", 1);
     WriteIniInt(L"Terminal", L"TxHexEcho", 0);
-    WriteIniInt(L"Terminal", L"Encoding", 1); // CP1251 by default now
+    WriteIniInt(L"Terminal", L"Encoding", 1);
     WriteIniInt(L"Terminal", L"RepeatDelay", 1000);
     WriteIniInt(L"Terminal", L"FontSize", 2);
     WriteIniInt(L"Terminal", L"TopMost", 0);
 
     WriteIniInt(L"History", L"Count", 0); WriteIniInt(L"MacroWindows", L"Count", 0);
     for (int i = 0; i < MACRO_BANK_COUNT; i++) { wchar_t key[16]; swprintf(key, 16, L"Bank%d", i); WriteIniInt(L"MacroWindows", key, 0); }
+
     for (int bank = 0; bank < MACRO_BANK_COUNT; bank++) {
         wchar_t section[32]; swprintf(section, 32, L"MacroSlots_%d", bank);
         wchar_t defaultTitle[8]; swprintf(defaultTitle, 8, L"M%d", bank + 1);
@@ -1961,9 +1956,10 @@ void WriteAllIni(void) {
     WriteIniString(L"Port", L"LastSerial", g_session.targetDevice.serial);
 }
 
-// ============================================================================
+// ====================================================================================================
 // WINMAIN
-// ============================================================================
+// ====================================================================================================
+
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmd, int show) {
     INITCOMMONCONTROLSEX icex; icex.dwSize = sizeof(INITCOMMONCONTROLSEX); icex.dwICC = ICC_WIN95_CLASSES; InitCommonControlsEx(&icex);
     InitializeCriticalSection(&g_csComm); InitializeCriticalSection(&g_csRx);
@@ -1991,10 +1987,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmd, int show) {
     ic.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1); ic.lpszClassName = L"WT232_Info_Scroll_Class"; RegisterClassW(&ic);
 
     wchar_t settingsTitle[128]; swprintf(settingsTitle, 128, L"WT232 Settings " APP_VERSION);
-    // Добавлен стиль WS_EX_TOPMOST для окна настроек
     g_hwndSettings = CreateWindowExW(WS_EX_TOPMOST, L"WT232_Settings_Class", settingsTitle,
-        WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX | WS_CLIPCHILDREN,
-        CW_USEDEFAULT, CW_USEDEFAULT, 300, 330, NULL, NULL, hInst, NULL);
+                                     WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX | WS_CLIPCHILDREN,
+                                     CW_USEDEFAULT, CW_USEDEFAULT, 300, 330, NULL, NULL, hInst, NULL);
     if (!g_hwndSettings) return 0;
 
     ApplyThemeToWindow(g_hwndSettings); ShowWindow(g_hwndSettings, show); UpdateWindow(g_hwndSettings);
@@ -2008,9 +2003,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmd, int show) {
     return 0;
 }
 
-// ============================================================================
+// ====================================================================================================
 // SETFONTCALLBACK
-// ============================================================================
+// ====================================================================================================
+
 BOOL CALLBACK SetFontCallback(HWND hWndChild, LPARAM lParam) {
     wchar_t cn[32] = {0}; GetClassNameW(hWndChild, cn, 32);
     if (wcscmp(cn, L"STATIC") == 0 || wcscmp(cn, L"BUTTON") == 0 || wcscmp(cn, L"COMBOBOX") == 0 || wcscmp(cn, L"EDIT") == 0)
@@ -2018,9 +2014,10 @@ BOOL CALLBACK SetFontCallback(HWND hWndChild, LPARAM lParam) {
     return TRUE;
 }
 
-// ============================================================================
-// WNDPROC (ОКНО НАСТРОЕК)
-// ============================================================================
+// ====================================================================================================
+// WNDPROC (Окно настроек)
+// ====================================================================================================
+
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_ERASEBKGND: { HDC hdc = (HDC)wp; RECT rc; GetClientRect(hwnd, &rc); static HBRUSH hBrush = NULL; if (!hBrush) hBrush = CreateSolidBrush(g_pTheme->bgColor); FillRect(hdc, &rc, hBrush); return 1; }
@@ -2029,35 +2026,67 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_CTLCOLORSTATIC: { HDC hdc = (HDC)wp; SetBkColor(hdc, g_pTheme->bgColor); SetTextColor(hdc, g_pTheme->fgColor); static HBRUSH hBrush = NULL; if (!hBrush) hBrush = CreateSolidBrush(g_pTheme->bgColor); return (LRESULT)hBrush; }
         case WM_CREATE: {
             HFONT hFont = GetStockObject(DEFAULT_GUI_FONT);
+
+            // === ПОРТ ===
             CreateWindowExW(0, L"STATIC", L"Порт:", WS_CHILD|WS_VISIBLE, 20, 18, 50, 20, hwnd, NULL, NULL, NULL);
             g_hBtnInfo = CreateWindowExW(0, L"BUTTON", L"?", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 70, 15, 22, 22, hwnd, (HMENU)IDC_BTN_INFO, NULL, NULL);
             g_hComboPort = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD|WS_VISIBLE|CBS_DROPDOWNLIST|WS_VSCROLL, 110, 15, 150, 200, hwnd, (HMENU)IDC_COMBO_PORT, NULL, NULL);
+
+            // === СКОРОСТЬ ===
             CreateWindowExW(0, L"STATIC", L"Скорость:", WS_CHILD|WS_VISIBLE, 20, 50, 80, 20, hwnd, NULL, NULL, NULL);
             g_hComboBaud = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD|WS_VISIBLE|CBS_DROPDOWN|WS_VSCROLL, 110, 47, 150, 200, hwnd, (HMENU)IDC_COMBO_BAUD, NULL, NULL);
-            SendMessageW(g_hComboBaud, CB_ADDSTRING, 0, (LPARAM)L"2400"); SendMessageW(g_hComboBaud, CB_ADDSTRING, 0, (LPARAM)L"4800");
-            SendMessageW(g_hComboBaud, CB_ADDSTRING, 0, (LPARAM)L"9600"); SendMessageW(g_hComboBaud, CB_ADDSTRING, 0, (LPARAM)L"19200");
-            SendMessageW(g_hComboBaud, CB_ADDSTRING, 0, (LPARAM)L"38400"); SendMessageW(g_hComboBaud, CB_ADDSTRING, 0, (LPARAM)L"57600");
+            SendMessageW(g_hComboBaud, CB_ADDSTRING, 0, (LPARAM)L"2400");
+            SendMessageW(g_hComboBaud, CB_ADDSTRING, 0, (LPARAM)L"4800");
+            SendMessageW(g_hComboBaud, CB_ADDSTRING, 0, (LPARAM)L"9600");
+            SendMessageW(g_hComboBaud, CB_ADDSTRING, 0, (LPARAM)L"19200");
+            SendMessageW(g_hComboBaud, CB_ADDSTRING, 0, (LPARAM)L"38400");
+            SendMessageW(g_hComboBaud, CB_ADDSTRING, 0, (LPARAM)L"57600");
             SendMessageW(g_hComboBaud, CB_ADDSTRING, 0, (LPARAM)L"115200");
+
+            // === БИТЫ ДАННЫХ ===
             CreateWindowExW(0, L"STATIC", L"Биты:", WS_CHILD|WS_VISIBLE, 20, 82, 80, 20, hwnd, NULL, NULL, NULL);
             g_hComboDataBits = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD|WS_VISIBLE|CBS_DROPDOWNLIST|WS_VSCROLL, 110, 79, 150, 200, hwnd, (HMENU)IDC_COMBO_DATABITS, NULL, NULL);
-            SendMessageW(g_hComboDataBits, CB_ADDSTRING, 0, (LPARAM)L"5"); SendMessageW(g_hComboDataBits, CB_ADDSTRING, 0, (LPARAM)L"6");
-            SendMessageW(g_hComboDataBits, CB_ADDSTRING, 0, (LPARAM)L"7"); SendMessageW(g_hComboDataBits, CB_ADDSTRING, 0, (LPARAM)L"8");
-            CreateWindowExW(0, L"STATIC", L"Чётность:", WS_CHILD|WS_VISIBLE, 20, 114, 80, 20, hwnd, NULL, NULL, NULL);
+            SendMessageW(g_hComboDataBits, CB_ADDSTRING, 0, (LPARAM)L"5");
+            SendMessageW(g_hComboDataBits, CB_ADDSTRING, 0, (LPARAM)L"6");
+            SendMessageW(g_hComboDataBits, CB_ADDSTRING, 0, (LPARAM)L"7");
+            SendMessageW(g_hComboDataBits, CB_ADDSTRING, 0, (LPARAM)L"8");
+
+            // === ЧЕТНОСТЬ ===
+            CreateWindowExW(0, L"STATIC", L"Четность:", WS_CHILD|WS_VISIBLE, 20, 114, 80, 20, hwnd, NULL, NULL, NULL);
             g_hComboParity = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD|WS_VISIBLE|CBS_DROPDOWNLIST|WS_VSCROLL, 110, 111, 150, 200, hwnd, (HMENU)IDC_COMBO_PARITY, NULL, NULL);
-            SendMessageW(g_hComboParity, CB_ADDSTRING, 0, (LPARAM)L"Нет / None"); SendMessageW(g_hComboParity, CB_ADDSTRING, 0, (LPARAM)L"Чёт / Even");
-            SendMessageW(g_hComboParity, CB_ADDSTRING, 0, (LPARAM)L"Нечёт / Odd"); SendMessageW(g_hComboParity, CB_ADDSTRING, 0, (LPARAM)L"Маркер / Mark");
+            SendMessageW(g_hComboParity, CB_ADDSTRING, 0, (LPARAM)L"Нет / None");
+            SendMessageW(g_hComboParity, CB_ADDSTRING, 0, (LPARAM)L"Чет / Even");
+            SendMessageW(g_hComboParity, CB_ADDSTRING, 0, (LPARAM)L"Нечет / Odd");
+            SendMessageW(g_hComboParity, CB_ADDSTRING, 0, (LPARAM)L"Маркер / Mark");
             SendMessageW(g_hComboParity, CB_ADDSTRING, 0, (LPARAM)L"Пробел / Space");
+
+            // === СТОП-БИТЫ ===
             CreateWindowExW(0, L"STATIC", L"Стоп-биты:", WS_CHILD|WS_VISIBLE, 20, 146, 80, 20, hwnd, NULL, NULL, NULL);
             g_hComboStopBits = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD|WS_VISIBLE|CBS_DROPDOWNLIST|WS_VSCROLL, 110, 143, 150, 200, hwnd, (HMENU)IDC_COMBO_STOPBITS, NULL, NULL);
-            SendMessageW(g_hComboStopBits, CB_ADDSTRING, 0, (LPARAM)L"1"); SendMessageW(g_hComboStopBits, CB_ADDSTRING, 0, (LPARAM)L"1.5"); SendMessageW(g_hComboStopBits, CB_ADDSTRING, 0, (LPARAM)L"2");
-            CreateWindowExW(0, L"STATIC", L"Упр. потоком:", WS_CHILD|WS_VISIBLE, 20, 178, 80, 20, hwnd, NULL, NULL, NULL);
-            g_hComboFlow = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD|WS_VISIBLE|CBS_DROPDOWNLIST|WS_VSCROLL, 110, 175, 150, 200, hwnd, (HMENU)IDC_COMBO_FLOW, NULL, NULL);
-            SendMessageW(g_hComboFlow, CB_ADDSTRING, 0, (LPARAM)L"Нет / None"); SendMessageW(g_hComboFlow, CB_ADDSTRING, 0, (LPARAM)L"XON/XOFF");
-            SendMessageW(g_hComboFlow, CB_ADDSTRING, 0, (LPARAM)L"RTS/CTS"); SendMessageW(g_hComboFlow, CB_ADDSTRING, 0, (LPARAM)L"RS-485 (RTS Toggle)");
+            SendMessageW(g_hComboStopBits, CB_ADDSTRING, 0, (LPARAM)L"1");
+            SendMessageW(g_hComboStopBits, CB_ADDSTRING, 0, (LPARAM)L"1.5");
+            SendMessageW(g_hComboStopBits, CB_ADDSTRING, 0, (LPARAM)L"2");
+
+            // === УПР. ПОТОКОМ (ИСПРАВЛЕНОЕ РАСПОЛОЖЕНИЕ) ===
+            CreateWindowExW(0, L"STATIC", L"Упр. потоком:", WS_CHILD|WS_VISIBLE, 20, 178, 90, 20, hwnd, NULL, NULL, NULL);
+            // Кнопка ? расположена сразу после надписи "Упр. потоком:" (x=110),
+            // точно так же, как кнопка ? для Порта расположена после надписи "Порт:" (x=70)
+            HWND hBtnFlowInfo = CreateWindowExW(0, L"BUTTON", L"?", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 110, 174, 22, 22, hwnd, (HMENU)IDC_BTN_FLOW_INFO, NULL, NULL);
+            if (hBtnFlowInfo) SendMessage(hBtnFlowInfo, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
+            // Выпадающий список сдвинут правее кнопки справки
+            g_hComboFlow = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD|WS_VISIBLE|CBS_DROPDOWNLIST|WS_VSCROLL, 137, 175, 123, 200, hwnd, (HMENU)IDC_COMBO_FLOW, NULL, NULL);
+            SendMessageW(g_hComboFlow, CB_ADDSTRING, 0, (LPARAM)L"Нет / None");
+            SendMessageW(g_hComboFlow, CB_ADDSTRING, 0, (LPARAM)L"XON/XOFF");
+            SendMessageW(g_hComboFlow, CB_ADDSTRING, 0, (LPARAM)L"RTS/CTS");
+            SendMessageW(g_hComboFlow, CB_ADDSTRING, 0, (LPARAM)L"RS-485 (RTS Toggle)");
+
+            // === КНОПКИ OK / ОТМЕНА ===
             CreateWindowExW(0, L"BUTTON", L"OK", WS_CHILD|WS_VISIBLE|BS_DEFPUSHBUTTON, 60, 215, 70, 35, hwnd, (HMENU)IDC_BTN_OK, NULL, NULL);
             CreateWindowExW(0, L"BUTTON", L"Отмена", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 160, 215, 70, 35, hwnd, (HMENU)IDC_BTN_CANCEL, NULL, NULL);
 
-            wchar_t lastPort[MAX_PORT_NAME] = {0}; ReadIniString(L"Port", L"LastPortName", lastPort, MAX_PORT_NAME, L"COM1");
+            // === ЗАГРУЗКА СОХРАНЁННЫХ НАСТРОЕК ===
+            wchar_t lastPort[MAX_PORT_NAME] = {0};
+            ReadIniString(L"Port", L"LastPortName", lastPort, MAX_PORT_NAME, L"COM1");
             int lastBaud = ReadIniInt(L"Port", L"LastBaudrate", 115200);
             int lastDataBits = ReadIniInt(L"Port", L"LastDataBits", 8);
             int lastParity = ReadIniInt(L"Port", L"LastParity", 0);
@@ -2066,22 +2095,64 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
             init_com_ports(hwnd, FALSE, lastPort);
 
-            wchar_t baudStr[16]; swprintf(baudStr, 16, L"%d", lastBaud);
+            wchar_t baudStr[16];
+            swprintf(baudStr, 16, L"%d", lastBaud);
             int baudIdx = (int)SendMessageW(g_hComboBaud, CB_FINDSTRINGEXACT, (WPARAM)-1, (LPARAM)baudStr);
-            if (baudIdx != CB_ERR) SendMessage(g_hComboBaud, CB_SETCURSEL, baudIdx, 0); else SendMessage(g_hComboBaud, CB_SETCURSEL, 6, 0);
+            if (baudIdx != CB_ERR) SendMessage(g_hComboBaud, CB_SETCURSEL, baudIdx, 0);
+            else SendMessage(g_hComboBaud, CB_SETCURSEL, 6, 0);
 
             int dataBitsIdx = lastDataBits - 5;
-            if (dataBitsIdx >= 0 && dataBitsIdx < 4) SendMessage(g_hComboDataBits, CB_SETCURSEL, dataBitsIdx, 0); else SendMessage(g_hComboDataBits, CB_SETCURSEL, 3, 0);
-            if (lastParity >= 0 && lastParity < 5) SendMessage(g_hComboParity, CB_SETCURSEL, lastParity, 0); else SendMessage(g_hComboParity, CB_SETCURSEL, 0, 0);
-            if (lastStopBits >= 0 && lastStopBits < 3) SendMessage(g_hComboStopBits, CB_SETCURSEL, lastStopBits, 0); else SendMessage(g_hComboStopBits, CB_SETCURSEL, 0, 0);
-            if (lastFlow >= 0 && lastFlow < 4) SendMessage(g_hComboFlow, CB_SETCURSEL, lastFlow, 0); else SendMessage(g_hComboFlow, CB_SETCURSEL, 2, 0);
+            if (dataBitsIdx >= 0 && dataBitsIdx < 4) SendMessage(g_hComboDataBits, CB_SETCURSEL, dataBitsIdx, 0);
+            else SendMessage(g_hComboDataBits, CB_SETCURSEL, 3, 0);
 
-            EnumChildWindows(hwnd, SetFontCallback, (LPARAM)hFont); ApplyThemeToWindow(hwnd); return 0;
+            if (lastParity >= 0 && lastParity < 5) SendMessage(g_hComboParity, CB_SETCURSEL, lastParity, 0);
+            else SendMessage(g_hComboParity, CB_SETCURSEL, 0, 0);
+
+            if (lastStopBits >= 0 && lastStopBits < 3) SendMessage(g_hComboStopBits, CB_SETCURSEL, lastStopBits, 0);
+            else SendMessage(g_hComboStopBits, CB_SETCURSEL, 0, 0);
+
+            if (lastFlow >= 0 && lastFlow < 4) SendMessage(g_hComboFlow, CB_SETCURSEL, lastFlow, 0);
+            else SendMessage(g_hComboFlow, CB_SETCURSEL, 2, 0);
+
+            EnumChildWindows(hwnd, SetFontCallback, (LPARAM)hFont);
+            ApplyThemeToWindow(hwnd);
+            return 0;
         }
         case WM_KEYDOWN: { if (wp == VK_F1) { show_about_dialog(hwnd); return 0; } break; }
         case WM_COMMAND: {
             switch (LOWORD(wp)) {
                 case IDC_BTN_INFO: init_com_ports(hwnd, TRUE, NULL); break;
+                case IDC_BTN_FLOW_INFO: {
+                    static const wchar_t flowHelp[] =
+                        L"Режимы управления потоком (Flow Control):\r\n"
+                        L"=========================================\r\n\r\n"
+                        L"Нет (None)\r\n"
+                        L"  Управление отсутствует. Используйте для простых\r\n"
+                        L"  TTL-переходников, отладки или когда линии RTS/CTS\r\n"
+                        L"  физически не подключены.\r\n\r\n"
+                        L"XON/XOFF\r\n"
+                        L"  Программное управление символами XON(0x11)/XOFF(0x13).\r\n"
+                        L"  Не требует дополнительных проводов. Может конфликтовать\r\n"
+                        L"  с передачей бинарных данных, содержащих эти коды.\r\n\r\n"
+                        L"RTS/CTS\r\n"
+                        L"  Классическое аппаратное рукопожатие. Устройство\r\n"
+                        L"  сигнализирует о готовности через RTS и проверяет\r\n"
+                        L"  готовность собеседника через CTS. Наиболее надежно\r\n"
+                        L"  для высокоскоростной передачи.\r\n\r\n"
+                        L"RS-485 (RTS Toggle)\r\n"
+                        L"  Линия RTS автоматически переключается драйвером:\r\n"
+                        L"  HIGH во время передачи (TX Enable), LOW в покое.\r\n"
+                        L"  Предназначено для полудуплексных шин RS-485,\r\n"
+                        L"  где одна пара проводов используется для RX и TX.\r\n"
+                        L"  Требует поддержки RTS_TOGGLE драйвером адаптера.";
+                    HWND hInfo = CreateWindowExW(WS_EX_TOOLWINDOW, L"WT232_Info_Scroll_Class",
+                        L"Справка: Управление потоком",
+                        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+                        CW_USEDEFAULT, CW_USEDEFAULT, 420, 480,
+                        hwnd, NULL, GetModuleHandle(NULL), (LPVOID)flowHelp);
+                    if (hInfo) { ShowWindow(hInfo, SW_SHOW); UpdateWindow(hInfo); ApplyThemeToWindow(hInfo); }
+                    break;
+                }
                 case IDC_BTN_OK: {
                     WriteAllIni();
                     wchar_t selPort[MAX_PORT_NAME]={0}; int pi = (int)SendMessageW(g_hComboPort, CB_GETCURSEL, 0, 0);
@@ -2096,8 +2167,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                         int winW = ReadIniInt(L"Terminal", L"Width", 700); int winH = ReadIniInt(L"Terminal", L"Height", 480);
                         int winX = ReadIniInt(L"Terminal", L"X", CW_USEDEFAULT); int winY = ReadIniInt(L"Terminal", L"Y", CW_USEDEFAULT);
                         g_hwndTerminal = CreateWindowExW(0, L"WT232_Terminal_Class", g_szTitle,
-                            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, winX, winY, winW, winH,
-                            NULL, NULL, GetModuleHandle(NULL), NULL);
+                                                       WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, winX, winY, winW, winH,
+                                                       NULL, NULL, GetModuleHandle(NULL), NULL);
                         if (g_hwndTerminal) {
                             SetTimer(g_hwndTerminal, TIMER_RECONNECT_ID, 500, NULL);
                             StartRxTxThreads(g_hwndTerminal); ApplyThemeToWindow(g_hwndTerminal); UpdateAllMacroButtonTitles();
@@ -2116,46 +2187,24 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
-// ============================================================================
-// TERMINALWNDPROC (ОСНОВНОЕ ОКНО)
-// ============================================================================
+// ====================================================================================================
+// TERMINALWNDPROC (Основное окно терминала)
+// ====================================================================================================
+
 LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
-        case WM_ERASEBKGND: {
-            HDC hdc = (HDC)wp; RECT rc; GetClientRect(hwnd, &rc);
-            static HBRUSH hBrush = NULL; if (!hBrush) hBrush = CreateSolidBrush(g_pTheme->bgColor);
-            FillRect(hdc, &rc, hBrush); return 1;
-        }
-        case WM_CTLCOLORBTN: {
-            HDC hdc = (HDC)wp; SetBkColor(hdc, g_pTheme->btnBg); SetTextColor(hdc, g_pTheme->btnFg);
-            HFONT hFont = (HFONT)SendMessage((HWND)lp, WM_GETFONT, 0, 0);
-            if (hFont) SelectObject(hdc, hFont);
-            static HBRUSH hBrush = NULL; if (!hBrush) hBrush = CreateSolidBrush(g_pTheme->btnBg);
-            return (LRESULT)hBrush;
-        }
-        case WM_CTLCOLOREDIT: {
-            HDC hdc = (HDC)wp; SetBkColor(hdc, g_pTheme->editBg); SetTextColor(hdc, g_pTheme->editFg);
-            static HBRUSH hBrush = NULL; if (!hBrush) hBrush = CreateSolidBrush(g_pTheme->editBg);
-            return (LRESULT)hBrush;
-        }
-        case WM_CTLCOLORSTATIC: {
-            HDC hdc = (HDC)wp; SetBkColor(hdc, g_pTheme->bgColor); SetTextColor(hdc, g_pTheme->fgColor);
-            static HBRUSH hBrush = NULL; if (!hBrush) hBrush = CreateSolidBrush(g_pTheme->bgColor);
-            return (LRESULT)hBrush;
-        }
+        case WM_ERASEBKGND: { HDC hdc = (HDC)wp; RECT rc; GetClientRect(hwnd, &rc); static HBRUSH hBrush = NULL; if (!hBrush) hBrush = CreateSolidBrush(g_pTheme->bgColor); FillRect(hdc, &rc, hBrush); return 1; }
+        case WM_CTLCOLORBTN: { HDC hdc = (HDC)wp; SetBkColor(hdc, g_pTheme->btnBg); SetTextColor(hdc, g_pTheme->btnFg); HFONT hFont = (HFONT)SendMessage((HWND)lp, WM_GETFONT, 0, 0); if (hFont) SelectObject(hdc, hFont); static HBRUSH hBrush = NULL; if (!hBrush) hBrush = CreateSolidBrush(g_pTheme->btnBg); return (LRESULT)hBrush; }
+        case WM_CTLCOLOREDIT: { HDC hdc = (HDC)wp; SetBkColor(hdc, g_pTheme->editBg); SetTextColor(hdc, g_pTheme->editFg); static HBRUSH hBrush = NULL; if (!hBrush) hBrush = CreateSolidBrush(g_pTheme->editBg); return (LRESULT)hBrush; }
+        case WM_CTLCOLORSTATIC: { HDC hdc = (HDC)wp; SetBkColor(hdc, g_pTheme->bgColor); SetTextColor(hdc, g_pTheme->fgColor); static HBRUSH hBrush = NULL; if (!hBrush) hBrush = CreateSolidBrush(g_pTheme->bgColor); return (LRESULT)hBrush; }
         case WM_CREATE: {
             LoadLibraryW(L"riched20.dll");
             g_hEditRx = CreateWindowExW(0, L"RichEdit20W", L"", WS_CHILD|WS_VISIBLE|WS_VSCROLL|ES_MULTILINE|ES_READONLY|ES_AUTOVSCROLL, 0, 0, 10, 10, hwnd, (HMENU)IDC_EDIT_RX, GetModuleHandle(NULL), NULL);
-            
+
             g_hChkDump = CreateWindowExW(0, L"BUTTON", L"DUMP", WS_CHILD|WS_VISIBLE|BS_AUTOCHECKBOX, 15, 0, 60, 20, hwnd, (HMENU)IDC_CHK_DUMP, NULL, NULL);
             int dumpState = ReadIniInt(L"Terminal", L"DumpMode", 0);
-            if (dumpState) {
-                SendMessage(g_hChkDump, BM_SETCHECK, BST_CHECKED, 0);
-                g_rxMode = RX_MODE_DUMP;
-                if (g_hChkEcho) SendMessage(g_hChkEcho, BM_SETCHECK, BST_UNCHECKED, 0);
-            } else {
-                g_rxMode = RX_MODE_TEXT;
-            }
+            if (dumpState) { SendMessage(g_hChkDump, BM_SETCHECK, BST_CHECKED, 0); g_rxMode = RX_MODE_DUMP; if (g_hChkEcho) SendMessage(g_hChkEcho, BM_SETCHECK, BST_UNCHECKED, 0); }
+            else { g_rxMode = RX_MODE_TEXT; }
             SendMessage(g_hChkDump, WM_SETFONT, (WPARAM)g_hMonoFont, TRUE);
 
             g_hComboFontSize = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD|WS_VISIBLE|CBS_DROPDOWNLIST|WS_VSCROLL, 125, 0, 60, 200, hwnd, (HMENU)IDC_COMBO_FONT_SIZE, NULL, NULL);
@@ -2171,11 +2220,10 @@ LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g_hMonoFont = CreateMonoFont(-MulDiv(g_fontSize, 96, 72));
             if (g_hEditRx) SendMessage(g_hEditRx, WM_SETFONT, (WPARAM)g_hMonoFont, TRUE);
 
-            // Уменьшена ширина с 140 до 95
             g_hComboEnc = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD|WS_VISIBLE|CBS_DROPDOWNLIST|WS_VSCROLL, 190, 0, 95, 200, hwnd, (HMENU)IDC_COMBO_ENC, NULL, NULL);
             for (int e = 0; e < g_encodingCount; e++) SendMessageW(g_hComboEnc, CB_ADDSTRING, 0, (LPARAM)g_encodings[e].name);
             SendMessage(g_hComboEnc, WM_SETFONT, (WPARAM)g_hMonoFont, TRUE);
-            int encodingIdx = ReadIniInt(L"Terminal", L"Encoding", 1); // Default to CP1251
+            int encodingIdx = ReadIniInt(L"Terminal", L"Encoding", 1);
             SendMessage(g_hComboEnc, CB_SETCURSEL, encodingIdx, 0);
 
             g_hChkTxHex = CreateWindowExW(0, L"BUTTON", L"HEX", WS_CHILD|WS_VISIBLE|BS_AUTOCHECKBOX, 290, 0, 55, 20, hwnd, (HMENU)IDC_CHK_TX_HEX, NULL, NULL);
@@ -2189,7 +2237,6 @@ LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             SendMessage(g_hChkEcho, BM_SETCHECK, echo ? BST_CHECKED : BST_UNCHECKED, 0);
             SendMessage(g_hChkEcho, WM_SETFONT, (WPARAM)g_hMonoFont, TRUE);
 
-            // Чекбокс UP (Always on Top)
             g_hChkTopMost = CreateWindowExW(0, L"BUTTON", L"UP", WS_CHILD|WS_VISIBLE|BS_AUTOCHECKBOX, 430, 0, 45, 20, hwnd, (HMENU)IDC_CHK_TOPMOST, NULL, NULL);
             int topMost = ReadIniInt(L"Terminal", L"TopMost", 0);
             SendMessage(g_hChkTopMost, BM_SETCHECK, topMost ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -2274,11 +2321,10 @@ LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_SIZE: {
             int w = LOWORD(lp), h = HIWORD(lp);
             int margin = 15, barH = 28, btnH = 25;
-            
+
             if (g_hChkDump) MoveWindow(g_hChkDump, margin, margin+2, 60, 20, TRUE);
             MoveWindow(g_hComboFontSize, 80, margin, 60, 200, TRUE);
-            // Обновлены координаты после уменьшения ширины Enc
-            MoveWindow(g_hComboEnc, 145, margin, 95, 200, TRUE); 
+            MoveWindow(g_hComboEnc, 145, margin, 95, 200, TRUE);
             MoveWindow(g_hChkTxHex, 245, margin+2, 55, 20, TRUE);
             MoveWindow(g_hChkEcho, 305, margin+2, 75, 20, TRUE);
             MoveWindow(g_hChkTopMost, 385, margin+2, 45, 20, TRUE);
@@ -2333,7 +2379,7 @@ LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     if (!GetCommModemStatus(g_hPort, &ms)) {
                         PurgeComm(g_hPort, PURGE_TXABORT | PURGE_RXABORT | PURGE_TXCLEAR | PURGE_RXCLEAR);
                         com_close(); Sleep(50); g_session.isWaitingReconnect = TRUE; skipTicks = 2;
-                        SetWindowTextW(hwnd, L"WT232 Terminal [Ожидание...]"); EnableWindow(g_hBtnSend, FALSE);
+                        SetWindowTextW(hwnd, L"WT232 Terminal [ожидание...]"); EnableWindow(g_hBtnSend, FALSE);
                         if (g_hTxStopEvent) SetEvent(g_hTxStopEvent); g_isAutoSending = FALSE;
                         if (g_hBtnSend) SetWindowTextW(g_hBtnSend, L"SEND"); KillTimer(hwnd, TIMER_SCRIPT_ID);
                     }
@@ -2375,22 +2421,14 @@ LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
                 case IDC_CHK_DUMP: {
                     BOOL isDump = (SendMessage(g_hChkDump, BM_GETCHECK, 0, 0) == BST_CHECKED);
-                    if (isDump) {
-                        g_rxMode = RX_MODE_DUMP;
-                        if (g_hChkEcho) SendMessage(g_hChkEcho, BM_SETCHECK, BST_UNCHECKED, 0);
-                    } else {
-                        g_rxMode = RX_MODE_TEXT;
-                    }
+                    if (isDump) { g_rxMode = RX_MODE_DUMP; if (g_hChkEcho) SendMessage(g_hChkEcho, BM_SETCHECK, BST_UNCHECKED, 0); }
+                    else { g_rxMode = RX_MODE_TEXT; }
                     render_rx_buffer(FALSE);
                     break;
                 }
                 case IDC_CHK_ECHO: {
                     BOOL isEcho = (SendMessage(g_hChkEcho, BM_GETCHECK, 0, 0) == BST_CHECKED);
-                    if (isEcho && g_rxMode == RX_MODE_DUMP) {
-                        SendMessage(g_hChkDump, BM_SETCHECK, BST_UNCHECKED, 0);
-                        g_rxMode = RX_MODE_TEXT;
-                        render_rx_buffer(FALSE);
-                    }
+                    if (isEcho && g_rxMode == RX_MODE_DUMP) { SendMessage(g_hChkDump, BM_SETCHECK, BST_UNCHECKED, 0); g_rxMode = RX_MODE_TEXT; render_rx_buffer(FALSE); }
                     break;
                 }
                 case IDC_COMBO_FONT_SIZE:
@@ -2435,31 +2473,30 @@ LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 case IDC_BTN_ABOUT: show_about_dialog(hwnd); break;
                 case IDC_COMBO_ENC: if (HIWORD(wp) == CBN_SELCHANGE) render_rx_buffer(FALSE); break;
                 case IDC_BTN_SUFFIX_INFO: {
-                    static const wchar_t suffixHelp[] = 
+                    static const wchar_t suffixHelp[] =
                         L"Справка по суффиксам:\r\n"
-                        L"==========================================\r\n\r\n"
-                        L"Суффикс дополняет командную строку.\r\n"
+                        L"=========================================\r\n\r\n"
+                        L"Суффикс дополняет команду при отправке.\r\n"
                         L"Применяется при отправке данных.\r\n\r\n"
-                        L"Пресеты:\r\n"
-                        L"(пусто)  — без суффикса\r\n"
-                        L"`0D0A`   — CR+LF (Windows)\r\n"
-                        L"`0A`     — LF (Unix/Linux)\r\n"
-                        L"`0D`     — CR (Mac Classic)\r\n\r\n"
-                        L"Пользовательский ввод:\r\n"
-                        L"Любой HEX в обратных кавычках:\r\n"
+                        L"Резервы:\r\n"
+                        L"(пусто)   без суффикса\r\n"
+                        L"`0D0A`    CR+LF (Windows)\r\n"
+                        L"`0A`      LF (Unix/Linux)\r\n"
+                        L"`0D`      CR (Mac Classic)\r\n\r\n"
+                        L"Обратные кавычки:\r\n"
+                        L"Любой HEX в обратных кавычках\r\n"
                         L"`XX`, `XXXX`, `AA BB CC`\r\n"
                         L"Пробелы внутри кавычек игнорируются.\r\n"
                         L"Регистр не важен: `aa` = `AA`";
-                    
-                    HWND hInfo = CreateWindowExW(WS_EX_TOOLWINDOW, L"WT232_Info_Scroll_Class", 
-                        L"Справка: Суффиксы", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, 
-                        CW_USEDEFAULT, CW_USEDEFAULT, 380, 420, 
-                        hwnd, NULL, GetModuleHandle(NULL), (LPVOID)suffixHelp);
-                    if (hInfo) { ShowWindow(hInfo, SW_SHOW); UpdateWindow(hInfo); ApplyThemeToWindow(hInfo); } 
+                    HWND hInfo = CreateWindowExW(WS_EX_TOOLWINDOW, L"WT232_Info_Scroll_Class",
+                                                 L"Справка: Суффиксы", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+                                                 CW_USEDEFAULT, CW_USEDEFAULT, 380, 420,
+                                                 hwnd, NULL, GetModuleHandle(NULL), (LPVOID)suffixHelp);
+                    if (hInfo) { ShowWindow(hInfo, SW_SHOW); UpdateWindow(hInfo); ApplyThemeToWindow(hInfo); }
                     break;
                 }
                 case IDC_BTN_SCRIPT_INFO: {
-                    static const wchar_t scriptHelp[] = L"Справка по скриптам:\r\n==========================================\r\n\r\nФормат файла (.txt):\r\nКаждая строка - одна команда.\r\nПоддерживается инлайн-HEX (`XX`).\r\n\r\nДирективы:\r\n1000      - Глобальная задержка (мс)\r\n(только в первой строке)\r\n#DELAY 500 - Задержка перед след. командой\r\n#STOP      - Остановить скрипт\r\n#...       - Комментарий (игнорируется)\r\n\r\nБез #STOP скрипт выполняется циклически.";
+                    static const wchar_t scriptHelp[] = L"Справка по скриптам:\r\n=========================================\r\n\r\nФормат файла (.txt):\r\nКаждая строка - одна команда.\r\nПоддерживается инлайн-HEX (`XX`).\r\n\r\nДирективы:\r\n1000        - глобальная задержка (мс)\r\n(только в первой строке)\r\n#DELAY 500  - задержка перед след. командой\r\n#STOP       - остановить скрипт\r\n#...        - комментарий (игнорируется)\r\n\r\nБез #STOP скрипт выполняется циклически.";
                     HWND hInfo = CreateWindowExW(WS_EX_TOOLWINDOW, L"WT232_Info_Scroll_Class", L"Справка: Скрипты", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 380, 450, hwnd, NULL, GetModuleHandle(NULL), (LPVOID)scriptHelp);
                     if (hInfo) { ShowWindow(hInfo, SW_SHOW); UpdateWindow(hInfo); ApplyThemeToWindow(hInfo); } break;
                 }
@@ -2513,4 +2550,5 @@ LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
+
 // ===КОНЕЦ ФАЙЛА===
