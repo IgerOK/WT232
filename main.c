@@ -1,4 +1,4 @@
-// =====================================================================2424===
+// =====================================================================2516===
 // WT232 Terminal v0.3 (Fixes + UI Improvements) UTF-16 LE BOM  
 // ============================================================================
 #ifndef WINVER
@@ -1722,6 +1722,43 @@ LRESULT CALLBACK MacroPadWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_COMMAND: {
             if (!ctx) break;
             int id = LOWORD(wp);
+
+            // === ИСПРАВЛЕНИЕ: Обработка переключения режима RUN/EDIT ===
+            if (id == IDC_BTN_MACRO_MODE) {
+                g_editMode = !g_editMode;
+
+                // Обновляем текст кнопки
+                SetWindowTextW(ctx->hModeBtn, g_editMode ? L"EDIT" : L"RUN");
+                InvalidateRect(ctx->hModeBtn, NULL, TRUE);
+
+                // Обновляем строку статуса
+                if (ctx->hStatusLbl) {
+                    SetWindowTextW(ctx->hStatusLbl, g_editMode ? L" : EDIT MODE " : L" : RUN MODE ");
+                    InvalidateRect(ctx->hStatusLbl, NULL, TRUE);
+                }
+
+                // Управление доступностью поля заголовка банка
+                if (ctx->hTitleEdit) {
+                    if (g_editMode) {
+                        EnableWindow(ctx->hTitleEdit, TRUE);
+                        SetFocus(ctx->hTitleEdit);
+                        SendMessage(ctx->hTitleEdit, EM_SETSEL, 0, -1);
+                    } else {
+                        EnableWindow(ctx->hTitleEdit, FALSE);
+                        SendMessage(ctx->hTitleEdit, EM_SETSEL, 0, 0);
+                    }
+                    InvalidateRect(ctx->hTitleEdit, NULL, TRUE);
+                    UpdateWindow(ctx->hTitleEdit);
+                }
+
+                // При выходе из режима редактирования закрываем окно редактора макроса
+                if (!g_editMode && g_hwndMacroEdit) {
+                    CloseMacroEdit();
+                }
+                return 0;
+            }
+
+            // Переключение отображения LABEL/CMD
             if (id == IDC_BTN_MACRO_DISPLAY) {
                 g_showCommand = !g_showCommand;
                 SetWindowTextW(ctx->hDispBtn, g_showCommand ? L"CMD" : L"LABEL");
@@ -1729,12 +1766,19 @@ LRESULT CALLBACK MacroPadWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 UpdateMacroButtons(ctx->bankIndex);
                 return 0;
             }
+
+            // Нажатие на кнопки макросов
             if (id >= IDC_BTN_MACRO_BASE && id < IDC_BTN_MACRO_BASE + MACROS_PER_BANK) {
                 int slotIdx = id - IDC_BTN_MACRO_BASE;
-                if (g_editMode) ShowMacroEditWindow(hwnd, ctx->bankIndex, slotIdx);
-                else SendMacroCommand(ctx->bankIndex, slotIdx);
+                if (g_editMode) {
+                    ShowMacroEditWindow(hwnd, ctx->bankIndex, slotIdx);
+                } else {
+                    SendMacroCommand(ctx->bankIndex, slotIdx);
+                }
                 return 0;
             }
+
+            // Кнопка справки по скриптам
             if (id == IDC_MACRO_BTN_SCRIPT_INFO) {
                 static const wchar_t scriptHelp[] =
                     L"Справка по скриптам:\r\n"
@@ -1756,6 +1800,54 @@ LRESULT CALLBACK MacroPadWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 if (hInfo) { ShowWindow(hInfo, SW_SHOW); UpdateWindow(hInfo); ApplyThemeToWindow(hInfo); }
                 return 0;
             }
+
+            // Загрузка скрипта макроса
+            if (id == IDC_MACRO_BTN_LOAD) {
+                OPENFILENAMEW ofn;
+                wchar_t szFile[MAX_PATH] = L"";
+                ZeroMemory(&ofn, sizeof(ofn));
+                ofn.lStructSize = sizeof(ofn);
+                ofn.hwndOwner = hwnd;
+                ofn.lpstrFile = szFile;
+                ofn.nMaxFile = MAX_PATH;
+                ofn.lpstrFilter = L"Text Files (*.txt)\0*.txt\0All Files (*.*)\0*.*\0";
+                ofn.nFilterIndex = 1;
+                ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+                if (GetOpenFileNameW(&ofn)) {
+                    LoadMacroScript(ctx->bankIndex, szFile);
+                    SetWindowTextW(ctx->hScriptPath, szFile);
+                    UpdateMacroScriptUI(hwnd, ctx->bankIndex);
+                }
+                return 0;
+            }
+
+            // Запуск/Остановка скрипта макроса
+            if (id == IDC_MACRO_BTN_RUN) {
+                if (g_macroScriptRunning[ctx->bankIndex]) {
+                    StopMacroScript(ctx->bankIndex);
+                } else {
+                    if (g_macroScriptCount[ctx->bankIndex] > 0) {
+                        g_macroScriptRunning[ctx->bankIndex] = TRUE;
+                        UpdateMacroScriptUI(hwnd, ctx->bankIndex);
+                        RunNextMacroScriptCommand(ctx->bankIndex);
+                    } else {
+                        MessageBoxW(hwnd, L"Сначала загрузите скрипт!", L"Внимание", MB_ICONWARNING | MB_OK);
+                    }
+                }
+                return 0;
+            }
+
+            // Редактирование скрипта (открытие в системном редакторе)
+            if (id == IDC_MACRO_BTN_EDIT) {
+                wchar_t path[MAX_PATH];
+                GetMacroScriptPath(ctx->bankIndex, path, MAX_PATH);
+                if (wcslen(path) > 0) {
+                    ShellExecuteW(hwnd, L"open", path, NULL, NULL, SW_SHOWNORMAL);
+                }
+                return 0;
+            }
+
+            // Редактирование заголовка банка
             if (id == IDC_EDIT_MACRO_TITLE) {
                 if (HIWORD(wp) == EN_CHANGE && g_editMode) {
                     GetWindowTextW(ctx->hTitleEdit, g_macroBankTitles[ctx->bankIndex], MAX_MACRO_TITLE_LEN);
