@@ -1,5 +1,5 @@
-// ============================================================================================2554====
-// WT232 Terminal v0.3.1 (Flow Control Help + UI Fixes) UTF-16 LE BOM
+// ============================================================================================2829====
+// WT232 Terminal v0.4 (Script System Rewrite) UTF-16 LE BOM
 // ====================================================================================================
 
 #ifndef WINVER
@@ -25,12 +25,14 @@
 #include <stdio.h>
 #include <commdlg.h>
 #include <shellapi.h>
+#include <io.h>
+#include <fcntl.h>
 
 // ====================================================================================================
 // Константы и макросы
 // ====================================================================================================
 
-#define APP_VERSION L"v0.3.1"
+#define APP_VERSION L"v0.4"
 #define MAX_PORT_NAME       64
 #define RX_BUF_SIZE         4096
 #define MAX_HISTORY         30
@@ -40,11 +42,13 @@
 #define MACRO_CMD_LEN       256
 #define MAX_MACRO_TITLE_LEN 64
 #define DUMP_LINE_SIZE      16
+#define SCRIPT_EXTENSION    L".wts"
 
 #define FLOW_NONE           0
-#define FLOW_XONXOFF        1
-#define FLOW_RTSCCTS        2
+#define FLOW_RTSCCTS        1
+#define FLOW_XONXOFF        2
 #define FLOW_RS485          3
+#define FLOW_RS485_INV      4
 
 #define TX_MODE_HEX         0
 #define TX_MODE_TEXT        1
@@ -72,7 +76,7 @@
 #define IDC_COMBO_STOPBITS      1013
 #define IDC_COMBO_FLOW          1004
 #define IDC_BTN_INFO            1007
-#define IDC_BTN_FLOW_INFO       1039 // Новая кнопка справки Flow Control
+#define IDC_BTN_FLOW_INFO       1039
 #define IDC_EDIT_RX             1009
 #define IDC_COMBO_TX            1020
 #define IDC_COMBO_SUFFIX        1021
@@ -88,10 +92,9 @@
 #define IDC_CHK_REPEAT          1028
 #define IDC_COMBO_FONT_SIZE     1036
 #define IDC_EDIT_MACRO_TITLE    1037
-#define IDC_CHK_TOPMOST         1038 // 'Всегда поверх'
+#define IDC_CHK_TOPMOST         1038
 
-#define IDC_EDIT_SCRIPT_PATH    1029
-#define IDC_BTN_LOAD_SCRIPT     1030
+#define IDC_BTN_EDIT_SCRIPT     1030
 #define IDC_BTN_RUN_SCRIPT      1031
 #define IDC_BTN_SCRIPT_INFO     1032
 
@@ -104,11 +107,9 @@
 #define IDC_BTN_MACRO_MODE              (IDC_BTN_MACRO_BASE + MACROS_PER_BANK)
 #define IDC_BTN_MACRO_DISPLAY           (IDC_BTN_MACRO_BASE + MACROS_PER_BANK + 1)
 #define IDC_STATIC_MACRO_STATUS         (IDC_BTN_MACRO_BASE + MACROS_PER_BANK + 2)
-#define IDC_MACRO_SCRIPT_PATH           2001
-#define IDC_MACRO_BTN_SCRIPT_INFO       2002
-#define IDC_MACRO_BTN_LOAD              2003
-#define IDC_MACRO_BTN_RUN               2004
 #define IDC_MACRO_BTN_EDIT              2005
+#define IDC_MACRO_BTN_RUN               2004
+#define IDC_MACRO_BTN_SCRIPT_INFO       2006
 
 #define IDC_EDIT_MACRO_NAME     3001
 #define IDC_EDIT_MACRO_CMD      3002
@@ -182,8 +183,7 @@ HWND g_hBtnAbout = NULL;
 HWND g_hEditDelay = NULL;
 HWND g_hChkRepeat = NULL;
 HWND g_hComboFontSize = NULL;
-HWND g_hEditScriptPath = NULL;
-HWND g_hBtnLoadScript = NULL;
+HWND g_hBtnEditScript = NULL;
 HWND g_hBtnRunScript = NULL;
 HWND g_hBtnScriptInfo = NULL;
 HWND g_hChkTopMost = NULL;
@@ -226,12 +226,15 @@ static DWORD g_lastRenderedLen = 0;
 static com_session_t g_session = {0};
 static wchar_t g_iniPath[MAX_PATH] = {0};
 static wchar_t g_iniBackupPath[MAX_PATH] = {0};
+static wchar_t g_exePath[MAX_PATH] = {0};
+static wchar_t g_exeName[MAX_PATH] = {0};
 
 static ScriptItem g_scriptItems[MAX_SCRIPT_LINES];
 static int g_scriptCount = 0;
 static int g_scriptCurrentIndex = 0;
 static BOOL g_isScriptRunning = FALSE;
 static BOOL g_scriptHasStopMarker = FALSE;
+static wchar_t g_globalScriptPath[MAX_PATH] = {0};
 
 static MacroSlot g_macroBanks[MACRO_BANK_COUNT][MACROS_PER_BANK];
 static wchar_t g_macroBankTitles[MACRO_BANK_COUNT][MAX_MACRO_TITLE_LEN] = {0};
@@ -255,11 +258,9 @@ typedef struct {
     HWND hDispBtn;
     HWND hTitleEdit;
     HWND hStatusLbl;
-    HWND hScriptPath;
     HWND hScriptInfoBtn;
-    HWND hLoadBtn;
-    HWND hRunBtn;
     HWND hEditBtn;
+    HWND hRunBtn;
     HFONT hTitleFont;
 } MacroPadCtx;
 
@@ -272,7 +273,7 @@ typedef struct {
     HWND hBtnCancel;
 } MacroEditCtx;
 
-// Кодировки (без ASCII/CP1252 по памяти пользователя)
+// Кодировки
 static const EncodingEntry g_encodings[] = {
     { L"UTF-8", 65001 },
     { L"CP1251", 1251 },
@@ -288,6 +289,12 @@ static const wchar_t g_aboutText[] =
     L" • Работа с COM-портами (USB CDC/ACM).\r\n"
     L" • Режимы отображения HEX/TEXT/DUMP, инлайн-HEX (`XX`).\r\n"
     L" • Макросы (5 банков x 24 ячейки).\r\n"
+    L" • Система скриптов (.wts):\r\n"
+    L"   - Глобальный скрипт [имя_программы].wts\r\n"
+    L"   - Скрипты макросов [название_банка].wts\r\n"
+    L"   - Автоматическое создание при нажатии SCRIPT\r\n"
+    L"   - Поддержка инлайн-HEX/DEC внутри `...`\r\n"
+    L"   - Директивы: #DELAY, #STOP\r\n"
     L" • Синхронный автоповтор (Threads).\r\n"
     L"\r\n"
     L"Поддержка кодировок:\r\n"
@@ -297,6 +304,23 @@ static const wchar_t g_aboutText[] =
     L"MIT License\r\n"
     L"Copyright (c) 2026 IgerOK\r\n"
     L"https://github.com/IgerOK/WT232\r\n";
+
+static const wchar_t g_scriptExample[] =
+    L"# WT232 Terminal Script\r\n"
+    L"# Каждая строка - одна команда\r\n"
+    L"# Поддерживается инлайн-HEX/DEC внутри `...`\r\n"
+    L"\r\n"
+    L"# Директивы (в начале строки):\r\n"
+    L"# DELAY 500  - задержка перед следующей командой (мс)\r\n"
+    L"# STOP       - остановить выполнение скрипта\r\n"
+    L"# ...        - комментарий\r\n"
+    L"\r\n"
+    L"# Примеры команд:\r\n"
+    L"# AT\r\n"
+    L"# AT+BAUD=9600\r\n"
+    L"# `0D0A`     -> CR+LF\r\n"
+    L"# `011 001 255` -> 0B 01 FF\r\n"
+    L"\r\n";
 
 // ====================================================================================================
 // Прототипы функций
@@ -332,9 +356,6 @@ DWORD parse_text_with_inline_hex(const wchar_t* src, BYTE* dst, DWORD dstMax, UI
 int hex_char_val(wchar_t c);
 HFONT CreateMonoFont(int height);
 void update_rx_mode_ui(void);
-void LoadScriptFile(const wchar_t* path);
-void StopScript(void);
-void RunNextScriptCommand(void);
 void ApplyFontSize(int height);
 void show_about_dialog(HWND hParent);
 void LoadMacroBank(int bankIndex);
@@ -365,10 +386,18 @@ BOOL ReadAllIni(void);
 void WriteAllIni(void);
 void CreateDefaultIni(void);
 void GetMacroScriptPath(int bankIndex, wchar_t* outPath, int maxLen);
-void LoadMacroScript(int bankIndex, const wchar_t* path);
+void GetGlobalScriptPath(wchar_t* outPath, int maxLen);
+void CreateScriptFile(const wchar_t* path);
+void OpenScriptFile(HWND hwnd, const wchar_t* path);
+void LoadGlobalScript(void);
+void LoadMacroScript(int bankIndex);
+void StopGlobalScript(void);
+void RunNextGlobalScriptCommand(void);
 void StopMacroScript(int bankIndex);
 void RunNextMacroScriptCommand(int bankIndex);
 void UpdateMacroScriptUI(HWND hwnd, int bankIndex);
+void RenameMacroScriptFile(int bankIndex, const wchar_t* newTitle);
+void CheckScriptFileConsistency(void);
 
 DWORD WINAPI RxThreadProc(LPVOID lpParam);
 DWORD WINAPI TxThreadProc(LPVOID lpParam);
@@ -415,7 +444,6 @@ void ApplyFontSize(int height) {
     if (g_hComboTx) SendMessage(g_hComboTx, WM_SETFONT, (WPARAM)g_hMonoFont, TRUE);
     if (g_hComboSuffix) SendMessage(g_hComboSuffix, WM_SETFONT, (WPARAM)g_hMonoFont, TRUE);
     if (g_hEditDelay) SendMessage(g_hEditDelay, WM_SETFONT, (WPARAM)g_hMonoFont, TRUE);
-    if (g_hEditScriptPath) SendMessage(g_hEditScriptPath, WM_SETFONT, (WPARAM)g_hMonoFont, TRUE);
     if (g_hComboFontSize) SendMessage(g_hComboFontSize, WM_SETFONT, (WPARAM)g_hMonoFont, TRUE);
     if (g_hComboEnc) SendMessage(g_hComboEnc, WM_SETFONT, (WPARAM)g_hMonoFont, TRUE);
 
@@ -473,10 +501,14 @@ void update_terminal_title(const wchar_t* portName, int baudrate) {
     if (fIdx != CB_ERR) SendMessageW(g_hComboFlow, CB_GETLBTEXT, fIdx, (LPARAM)szFlow);
     else wcscpy(szFlow, L"?");
 
+    wchar_t exeName[MAX_PATH];
+    wcscpy(exeName, g_exeName);
+    wcscat(exeName, L".exe");
+
     ZeroMemory(g_szTitle, sizeof(g_szTitle));
     swprintf(g_szTitle, sizeof(g_szTitle)/sizeof(wchar_t),
-             L"WT232 Terminal " APP_VERSION L" - [%ls | %d bps | %ls-%ls-%ls | %ls]",
-             portName, baudrate, szDB, szParity, szSB, szFlow);
+             L"WT232 Terminal " APP_VERSION L" - [%ls | %d bps | %ls-%ls-%ls | %ls] | %ls",
+             portName, baudrate, szDB, szParity, szSB, szFlow, exeName);
 }
 
 BOOL com_open(const wchar_t* portName, int baudrate) {
@@ -516,11 +548,35 @@ BOOL com_open(const wchar_t* portName, int baudrate) {
     }
 
     int flowMode = (int)SendMessageW(g_hComboFlow, CB_GETCURSEL, 0, 0);
-    dcb.fOutxCtsFlow = FALSE; dcb.fInX = FALSE; dcb.fOutX = FALSE;
-    if (flowMode == FLOW_RS485) dcb.fRtsControl = RTS_CONTROL_TOGGLE;
-    else if (flowMode == FLOW_RTSCCTS) { dcb.fOutxCtsFlow = TRUE; dcb.fRtsControl = RTS_CONTROL_HANDSHAKE; }
-    else if (flowMode == FLOW_XONXOFF) { dcb.fInX = TRUE; dcb.fOutX = TRUE; dcb.fRtsControl = RTS_CONTROL_DISABLE; }
-    else dcb.fRtsControl = RTS_CONTROL_DISABLE;
+	dcb.fOutxCtsFlow = FALSE; 
+	dcb.fInX = FALSE; 
+	dcb.fOutX = FALSE;
+	dcb.fRtsControl = RTS_CONTROL_DISABLE;
+
+	switch (flowMode) {
+	    case FLOW_RS485:        // RTS Toggle (Normal)
+	        dcb.fRtsControl = RTS_CONTROL_TOGGLE;
+	        break;
+	    case FLOW_RS485_INV:    // RTS Toggle (Inverted)
+	        dcb.fRtsControl = RTS_CONTROL_TOGGLE;
+	        // Инвертированный RTS - устанавливаем отрицательную логику
+	        // Это зависит от драйвера, но обычно это делается через EscapeCommFunction
+	        EscapeCommFunction(hNewPort, CLRRTS);  // RTS LOW = TX Enable
+	        break;
+	    case FLOW_RTSCCTS:
+	        dcb.fOutxCtsFlow = TRUE;
+	        dcb.fRtsControl = RTS_CONTROL_HANDSHAKE;
+	        break;
+	    case FLOW_XONXOFF:
+	        dcb.fInX = TRUE;
+	        dcb.fOutX = TRUE;
+	        dcb.fRtsControl = RTS_CONTROL_DISABLE;
+	        break;
+	    case FLOW_NONE:
+	    default:
+	        dcb.fRtsControl = RTS_CONTROL_DISABLE;
+	        break;
+	}
 
     if (!SetCommState(hNewPort, &dcb)) { CloseHandle(hNewPort); return FALSE; }
 
@@ -706,7 +762,7 @@ LRESULT CALLBACK TxEditSubProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 // ====================================================================================================
-// PARSE_TEXT_WITH_INLINE_HEX
+// PARSE_TEXT_WITH_INLINE_HEX (расширенная версия с поддержкой HEX/DEC)
 // ====================================================================================================
 
 DWORD parse_text_with_inline_hex(const wchar_t* src, BYTE* dst, DWORD dstMax, UINT codepage) {
@@ -733,24 +789,152 @@ DWORD parse_text_with_inline_hex(const wchar_t* src, BYTE* dst, DWORD dstMax, UI
                 if (src[j] == L'`') { closePos = j; break; }
             }
             if (closePos > 0 && closePos > i + 1) {
-                BYTE tmpHex[256]; DWORD tmpHexLen = 0; BOOL valid = TRUE;
-                for (size_t k = i + 1; k < closePos && tmpHexLen < sizeof(tmpHex); k++) {
-                    wchar_t ch = src[k];
-                    if (ch == L' ' || ch == L'\t') continue;
-                    int hv = hex_char_val(ch);
-                    if (hv < 0) { valid = FALSE; break; }
-                    size_t nextK = k + 1;
-                    while (nextK < closePos && (src[nextK] == L' ' || src[nextK] == L'\t')) nextK++;
-                    if (nextK >= closePos) { valid = FALSE; break; }
-                    int lv = hex_char_val(src[nextK]);
-                    if (lv < 0) { valid = FALSE; break; }
-                    tmpHex[tmpHexLen++] = (BYTE)((hv << 4) | lv);
-                    k = nextK;
+                size_t innerLen = closePos - i - 1;
+                wchar_t innerBuf[1024];
+                if (innerLen >= sizeof(innerBuf)/sizeof(wchar_t)) innerLen = sizeof(innerBuf)/sizeof(wchar_t) - 1;
+                wcsncpy(innerBuf, src + i + 1, innerLen);
+                innerBuf[innerLen] = L'\0';
+
+                wchar_t* tokens[512];
+                int tokenCount = 0;
+                wchar_t* p = innerBuf;
+                wchar_t* tokenStart = p;
+                BOOL inToken = FALSE;
+
+                while (*p) {
+                    if (*p == L' ' || *p == L',' || *p == L'.' || *p == L'\r' || *p == L'\n') {
+                        if (inToken) {
+                            *p = L'\0';
+                            tokens[tokenCount++] = tokenStart;
+                            inToken = FALSE;
+                        }
+                    } else {
+                        if (!inToken) {
+                            tokenStart = p;
+                            inToken = TRUE;
+                        }
+                    }
+                    p++;
                 }
+                if (inToken) {
+                    tokens[tokenCount++] = tokenStart;
+                }
+
+                BYTE tmpHex[256];
+                DWORD tmpHexLen = 0;
+                BOOL valid = TRUE;
+                BOOL hasTokens = (tokenCount > 0);
+
+                for (int t = 0; t < tokenCount && valid && tmpHexLen < sizeof(tmpHex); t++) {
+                    wchar_t* token = tokens[t];
+                    size_t tokenLen = wcslen(token);
+
+                    if (tokenLen == 0) continue;
+
+                    BOOL isHexOnly = TRUE;
+                    BOOL isDecOnly = TRUE;
+                    for (size_t k = 0; k < tokenLen; k++) {
+                        wchar_t ch = token[k];
+                        if (!((ch >= L'0' && ch <= L'9') || (ch >= L'A' && ch <= L'F') || (ch >= L'a' && ch <= L'f'))) {
+                            isHexOnly = FALSE;
+                            isDecOnly = FALSE;
+                            break;
+                        }
+                        if (!(ch >= L'0' && ch <= L'9')) {
+                            isDecOnly = FALSE;
+                        }
+                    }
+
+                    if (!isHexOnly && !isDecOnly) {
+                        valid = FALSE;
+                        break;
+                    }
+
+                    if (isDecOnly) {
+                        if (tokenLen == 1) {
+                            valid = FALSE;
+                            break;
+                        }
+                        else if (tokenLen == 2) {
+                            int hv = hex_char_val(token[0]);
+                            int lv = hex_char_val(token[1]);
+                            if (hv < 0 || lv < 0) {
+                                valid = FALSE;
+                                break;
+                            }
+                            tmpHex[tmpHexLen++] = (BYTE)((hv << 4) | lv);
+                        }
+                        else if (tokenLen == 3) {
+                            long decVal = wcstol(token, NULL, 10);
+                            if (decVal < 0 || decVal > 255) {
+                                valid = FALSE;
+                                break;
+                            }
+                            tmpHex[tmpHexLen++] = (BYTE)decVal;
+                        }
+                        else {
+                            if (tokenLen % 2 != 0) {
+                                valid = FALSE;
+                                break;
+                            }
+                            for (size_t k = 0; k < tokenLen && tmpHexLen < sizeof(tmpHex); k += 2) {
+                                int hv = hex_char_val(token[k]);
+                                int lv = hex_char_val(token[k+1]);
+                                if (hv < 0 || lv < 0) {
+                                    valid = FALSE;
+                                    break;
+                                }
+                                tmpHex[tmpHexLen++] = (BYTE)((hv << 4) | lv);
+                            }
+                        }
+                    } else {
+                        if (tokenLen == 1) {
+                            valid = FALSE;
+                            break;
+                        }
+                        if (tokenLen == 2) {
+                            int hv = hex_char_val(token[0]);
+                            int lv = hex_char_val(token[1]);
+                            if (hv < 0 || lv < 0) {
+                                valid = FALSE;
+                                break;
+                            }
+                            tmpHex[tmpHexLen++] = (BYTE)((hv << 4) | lv);
+                        }
+                        else if (tokenLen == 3) {
+                            valid = FALSE;
+                            break;
+                        }
+                        else {
+                            if (tokenLen % 2 != 0) {
+                                valid = FALSE;
+                                break;
+                            }
+                            for (size_t k = 0; k < tokenLen && tmpHexLen < sizeof(tmpHex); k += 2) {
+                                int hv = hex_char_val(token[k]);
+                                int lv = hex_char_val(token[k+1]);
+                                if (hv < 0 || lv < 0) {
+                                    valid = FALSE;
+                                    break;
+                                }
+                                tmpHex[tmpHexLen++] = (BYTE)((hv << 4) | lv);
+                            }
+                        }
+                    }
+                }
+
+                if (hasTokens && tmpHexLen == 0 && valid) {
+                }
+
                 if (valid && tmpHexLen > 0) {
                     FLUSH_TEXT_ACCUM();
-                    for (DWORD b = 0; b < tmpHexLen && binLen < dstMax; b++) dst[binLen++] = tmpHex[b];
-                    i = closePos + 1; continue;
+                    for (DWORD b = 0; b < tmpHexLen && binLen < dstMax; b++) {
+                        dst[binLen++] = tmpHex[b];
+                    }
+                    i = closePos + 1;
+                    continue;
+                } else if (!valid) {
+                    return 0;
                 }
             }
             if (textAccumLen < 1023) textAccum[textAccumLen++] = src[i];
@@ -766,7 +950,7 @@ DWORD parse_text_with_inline_hex(const wchar_t* src, BYTE* dst, DWORD dstMax, UI
 }
 
 // ====================================================================================================
-// COM_SEND_UI
+// COM_SEND_UI (обновлённая версия)
 // ====================================================================================================
 
 void com_send_ui(HWND hwndParent) {
@@ -799,10 +983,36 @@ void com_send_ui(HWND hwndParent) {
         }
     } else {
         binLen = parse_text_with_inline_hex(g_wTxtBuf, g_binBuf, sizeof(g_binBuf), cp);
+        if (binLen == 0) {
+            if (wcschr(g_wTxtBuf, L'`') != NULL) {
+                MessageBoxW(hwndParent, L"Ошибка в inline-данных!\r\nПроверьте синтаксис внутри обратных кавычек.\r\n\r\n"
+                                       L"Правила:\r\n"
+                                       L"1 символ - ошибка\r\n"
+                                       L"2 символа - HEX (AA)\r\n"
+                                       L"3 символа - DEC 000..255 (011)\r\n"
+                                       L"4+ символов - HEX чётной длины (0D0A)\r\n"
+                                       L"Разделители: пробел, запятая, точка",
+                            L"Ошибка парсинга", MB_ICONERROR|MB_OK);
+                return;
+            }
+            MessageBoxW(hwndParent, L"Нет данных для отправки!", L"Ошибка", MB_ICONWARNING|MB_OK);
+            return;
+        }
+        
         wchar_t suffixBuf[256] = {0};
         GetWindowTextW(g_hComboSuffix, suffixBuf, 255);
         if (wcslen(suffixBuf) > 0 && binLen < sizeof(g_binBuf)) {
             DWORD suffixLen = parse_text_with_inline_hex(suffixBuf, g_binBuf + binLen, sizeof(g_binBuf) - binLen, cp);
+            if (suffixLen == 0 && wcschr(suffixBuf, L'`') != NULL) {
+                MessageBoxW(hwndParent, L"Ошибка в суффиксе!\r\nПроверьте синтаксис внутри обратных кавычек.\r\n\r\n"
+                                       L"Правила:\r\n"
+                                       L"1 символ - ошибка\r\n"
+                                       L"2 символа - HEX (AA)\r\n"
+                                       L"3 символа - DEC 000..255 (011)\r\n"
+                                       L"4+ символов - HEX чётной длины (0D0A)",
+                            L"Ошибка парсинга", MB_ICONERROR|MB_OK);
+                return;
+            }
             binLen += suffixLen;
         }
     }
@@ -961,9 +1171,32 @@ void PrepareAutoSendData(void) {
     } else {
         UINT cp = get_selected_codepage();
         binLen = parse_text_with_inline_hex(g_wTxtBuf, g_binBuf, sizeof(g_binBuf), cp);
+        if (binLen == 0 && wcschr(g_wTxtBuf, L'`') != NULL) {
+            MessageBoxW(g_hwndTerminal, L"Ошибка в inline-данных для автоотправки!\r\n"
+                                       L"Проверьте синтаксис внутри обратных кавычек.\r\n\r\n"
+                                       L"Правила:\r\n"
+                                       L"1 символ - ошибка\r\n"
+                                       L"2 символа - HEX (AA)\r\n"
+                                       L"3 символа - DEC 000..255 (011)\r\n"
+                                       L"4+ символов - HEX чётной длины (0D0A)\r\n"
+                                       L"Разделители: пробел, запятая, точка",
+                        L"Ошибка парсинга", MB_ICONERROR|MB_OK);
+            return;
+        }
         wchar_t suffixBuf[256] = {0}; GetWindowTextW(g_hComboSuffix, suffixBuf, 255);
         if (wcslen(suffixBuf) > 0 && binLen < sizeof(g_binBuf)) {
             DWORD suffixLen = parse_text_with_inline_hex(suffixBuf, g_binBuf + binLen, sizeof(g_binBuf) - binLen, cp);
+            if (suffixLen == 0 && wcschr(suffixBuf, L'`') != NULL) {
+                MessageBoxW(g_hwndTerminal, L"Ошибка в суффиксе для автоотправки!\r\n"
+                                           L"Проверьте синтаксис внутри обратных кавычек.\r\n\r\n"
+                                           L"Правила:\r\n"
+                                           L"1 символ - ошибка\r\n"
+                                           L"2 символа - HEX (AA)\r\n"
+                                           L"3 символа - DEC 000..255 (011)\r\n"
+                                           L"4+ символов - HEX чётной длины (0D0A)",
+                            L"Ошибка парсинга", MB_ICONERROR|MB_OK);
+                return;
+            }
             binLen += suffixLen;
         }
     }
@@ -1048,19 +1281,15 @@ void get_advanced_usb_descriptors(HDEVINFO hDevInfo, SP_DEVINFO_DATA* pDevInfo, 
         DWORD cb = sizeof(g_regBuffer);
         
         // === MFG ===
-        // 1. Пытаемся прочитать кастомную строку производителя
         if (RegQueryValueExW(hUsbKey, L"busi_ManufacturerString", NULL, NULL, (LPBYTE)g_regBuffer, &cb) == ERROR_SUCCESS && wcslen(g_regBuffer) > 0) {
             wcsncpy(outMfg, g_regBuffer, 127); outMfg[127] = L'\0';
         } else {
-            // 2. Фолбэк на UI Parent MFG
             cb = sizeof(g_regBuffer);
             if (RegQueryValueExW(hUsbKey, L"UIParentMFG", NULL, NULL, (LPBYTE)g_regBuffer, &cb) == ERROR_SUCCESS && wcslen(g_regBuffer) > 0) {
                 wcsncpy(outMfg, g_regBuffer, 127); outMfg[127] = L'\0';
             } else {
-                // 3. Фолбэк на SPDRP_MFG с фильтрацией
                 DWORD sz = 0;
                 if (SetupDiGetDeviceRegistryPropertyW(hUsbInfo, &usbDevData, SPDRP_MFG, NULL, (PBYTE)g_regBuffer, sizeof(g_regBuffer), &sz)) {
-                    // Фильтруем системные заглушки
                     if (!wcsstr(g_regBuffer, L"Майкрософт") && !wcsstr(g_regBuffer, L"хост") && !wcsstr(g_regBuffer, L"(Стандартный")) {
                         wcsncpy(outMfg, g_regBuffer, 127); outMfg[127] = L'\0';
                     } else {
@@ -1072,18 +1301,14 @@ void get_advanced_usb_descriptors(HDEVINFO hDevInfo, SP_DEVINFO_DATA* pDevInfo, 
 
         // === PRODUCT ===
         cb = sizeof(g_regBuffer);
-        // 1. Пытаемся прочитать кастомную строку продукта
         if (RegQueryValueExW(hUsbKey, L"busi_ProductString", NULL, NULL, (LPBYTE)g_regBuffer, &cb) == ERROR_SUCCESS && wcslen(g_regBuffer) > 0) {
             wcsncpy(outProduct, g_regBuffer, 127); outProduct[127] = L'\0';
         } else {
-            // 2. Фолбэк на свойство 24 (Device Description из USB дескриптора)
             DWORD sz = 0;
             if (SetupDiGetDeviceRegistryPropertyW(hUsbInfo, &usbDevData, 24, NULL, (PBYTE)g_regBuffer, sizeof(g_regBuffer), &sz) && wcslen(g_regBuffer) > 0) {
                 wcsncpy(outProduct, g_regBuffer, 127); outProduct[127] = L'\0';
             } else {
-                // 3. Фолбэк на SPDRP_DEVICEDESC с фильтрацией
                 if (SetupDiGetDeviceRegistryPropertyW(hUsbInfo, &usbDevData, SPDRP_DEVICEDESC, NULL, (PBYTE)g_regBuffer, sizeof(g_regBuffer), &sz)) {
-                    // Фильтруем системные заглушки
                     if (!wcsstr(g_regBuffer, L"Составное") && !wcsstr(g_regBuffer, L"Composite")) {
                         wcsncpy(outProduct, g_regBuffer, 127); outProduct[127] = L'\0';
                     } else {
@@ -1253,97 +1478,229 @@ void check_and_reconnect_search(wchar_t* outFoundPortName, BOOL* pIsFound) {
 }
 
 // ====================================================================================================
-// Scripts
+// Script System - Global Script
 // ====================================================================================================
 
-void LoadScriptFile(const wchar_t* path) {
-    FILE* f = _wfopen(path, L"r"); if (!f) return;
-    g_scriptCount = 0; g_scriptHasStopMarker = FALSE;
-    wchar_t line[MAX_LINE_LEN]; DWORD defaultDelay = 0; BOOL firstLine = TRUE;
+void GetGlobalScriptPath(wchar_t* outPath, int maxLen) {
+    outPath[0] = L'\0';
+    
+    // Get EXE path without extension
+    GetModuleFileNameW(NULL, g_exePath, MAX_PATH);
+    wcscpy(g_exeName, g_exePath);
+    wchar_t* pExt = wcsrchr(g_exeName, L'.');
+    if (pExt) *pExt = L'\0';
+    wchar_t* pSlash = wcsrchr(g_exeName, L'\\');
+    if (pSlash) wcscpy(g_exeName, pSlash + 1);
+    
+    // Build path: [exe_dir]\[exe_name].wts
+    wcscpy(outPath, g_exePath);
+    pSlash = wcsrchr(outPath, L'\\');
+    if (pSlash) *(pSlash + 1) = L'\0';
+    wcscat(outPath, g_exeName);
+    wcscat(outPath, SCRIPT_EXTENSION);
+}
 
+void CreateScriptFile(const wchar_t* path) {
+    if (_waccess(path, 0) == 0) return;
+    
+    FILE* f = _wfopen(path, L"w, ccs=UTF-8");
+    if (!f) return;
+    
+    // Write UTF-8 BOM
+    fwrite("\xEF\xBB\xBF", 1, 3, f);
+    
+    // Write example - используем %ls для широких строк
+    fwprintf(f, L"%ls", g_scriptExample);
+    fclose(f);
+}
+
+void OpenScriptFile(HWND hwnd, const wchar_t* path) {
+    // Create file if not exists
+    CreateScriptFile(path);
+    
+    // Open with notepad
+    wchar_t cmdLine[MAX_PATH + 32];
+    swprintf(cmdLine, sizeof(cmdLine)/sizeof(wchar_t), L"notepad.exe \"%ls\"", path);
+    
+    STARTUPINFOW si = {sizeof(si)};
+    PROCESS_INFORMATION pi;
+    
+    if (!CreateProcessW(NULL, cmdLine, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+        // Fallback to ShellExecute
+        ShellExecuteW(hwnd, L"open", path, NULL, NULL, SW_SHOWNORMAL);
+    } else {
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+    }
+}
+
+void LoadGlobalScript(void) {
+    wchar_t scriptPath[MAX_PATH];
+    GetGlobalScriptPath(scriptPath, MAX_PATH);
+    wcscpy(g_globalScriptPath, scriptPath);
+    
+    if (_waccess(scriptPath, 0) != 0) {
+        // File doesn't exist
+        g_scriptCount = 0;
+        g_scriptHasStopMarker = FALSE;
+        return;
+    }
+    
+    FILE* f = _wfopen(scriptPath, L"r, ccs=UTF-8");
+    if (!f) {
+        g_scriptCount = 0;
+        return;
+    }
+    
+    g_scriptCount = 0;
+    g_scriptHasStopMarker = FALSE;
+    wchar_t line[MAX_LINE_LEN];
+    DWORD defaultDelay = 0;
+    BOOL firstLine = TRUE;
+    
     while (fgetws(line, MAX_LINE_LEN, f)) {
         size_t len = wcslen(line);
         while (len > 0 && (line[len-1] == L'\n' || line[len-1] == L'\r')) line[--len] = L'\0';
         if (len == 0) continue;
-
+        
         if (firstLine) {
-            wchar_t* endPtr; long val = wcstol(line, &endPtr, 10);
-            if (*endPtr == L'\0' && val >= 0) { defaultDelay = (DWORD)val; firstLine = FALSE; continue; }
+            wchar_t* endPtr;
+            long val = wcstol(line, &endPtr, 10);
+            if (*endPtr == L'\0' && val >= 0) {
+                defaultDelay = (DWORD)val;
+                firstLine = FALSE;
+                continue;
+            }
             firstLine = FALSE;
         }
-        if (wcsncmp(line, L"#DELAY ", 6) == 0) { wchar_t* numPart = line + 6; while (*numPart == L' ') numPart++; defaultDelay = _wtol(numPart); continue; }
-        if (wcscmp(line, L"#STOP") == 0) { g_scriptHasStopMarker = TRUE; continue; }
+        if (wcsncmp(line, L"#DELAY ", 6) == 0) {
+            wchar_t* numPart = line + 6;
+            while (*numPart == L' ') numPart++;
+            defaultDelay = _wtol(numPart);
+            continue;
+        }
+        if (wcscmp(line, L"#STOP") == 0) {
+            g_scriptHasStopMarker = TRUE;
+            continue;
+        }
         if (line[0] == L'#') continue;
-
+        
         if (g_scriptCount < MAX_SCRIPT_LINES) {
             wcscpy(g_scriptItems[g_scriptCount].command, line);
-            g_scriptItems[g_scriptCount].delay = defaultDelay; g_scriptCount++;
+            g_scriptItems[g_scriptCount].delay = defaultDelay;
+            g_scriptCount++;
         }
     }
     fclose(f);
-    wchar_t pathBuf[MAX_PATH]; wcsncpy(pathBuf, path, MAX_PATH-1); pathBuf[MAX_PATH-1] = L'\0';
-    SetWindowTextW(g_hEditScriptPath, pathBuf); g_scriptCurrentIndex = 0;
+    g_scriptCurrentIndex = 0;
 }
 
-void StopScript(void) { KillTimer(g_hwndTerminal, TIMER_SCRIPT_ID); g_isScriptRunning = FALSE; SetWindowTextW(g_hBtnRunScript, L"RUN"); }
+void StopGlobalScript(void) {
+    if (g_hwndTerminal) KillTimer(g_hwndTerminal, TIMER_SCRIPT_ID);
+    g_isScriptRunning = FALSE;
+    if (g_hBtnRunScript) SetWindowTextW(g_hBtnRunScript, L"RUN");
+}
 
-void RunNextScriptCommand(void) {
+void RunNextGlobalScriptCommand(void) {
     if (g_scriptCount == 0 || g_hPort == INVALID_HANDLE_VALUE) return;
+    
     int currentIndex = g_scriptCurrentIndex;
     wchar_t* cmd = g_scriptItems[currentIndex].command;
     DWORD delay = g_scriptItems[currentIndex].delay;
-
+    
     SetWindowTextW(g_hComboTx, cmd);
     com_send_ui(g_hwndTerminal);
-
+    
     g_scriptCurrentIndex++;
     if (g_scriptCurrentIndex >= g_scriptCount) {
-        if (g_scriptHasStopMarker) { StopScript(); return; } else g_scriptCurrentIndex = 0;
+        if (g_scriptHasStopMarker) {
+            StopGlobalScript();
+            return;
+        } else {
+            g_scriptCurrentIndex = 0;
+        }
     }
     if (delay < 10) delay = 10;
-    SetTimer(g_hwndTerminal, TIMER_SCRIPT_ID, delay, NULL);
+    if (g_hwndTerminal) SetTimer(g_hwndTerminal, TIMER_SCRIPT_ID, delay, NULL);
 }
 
 // ====================================================================================================
-// Macro System
+// Script System - Macro Scripts
 // ====================================================================================================
 
 void GetMacroScriptPath(int bankIndex, wchar_t* outPath, int maxLen) {
     outPath[0] = L'\0';
     if (bankIndex < 0 || bankIndex >= MACRO_BANK_COUNT) return;
     if (wcslen(g_macroBankTitles[bankIndex]) == 0) return;
-    GetModuleFileNameW(NULL, outPath, maxLen);
-    wchar_t* pSlash = wcsrchr(outPath, L'\\'); if (pSlash) *(pSlash + 1) = L'\0';
-    wcscat(outPath, g_macroBankTitles[bankIndex]); wcscat(outPath, L".txt");
+    
+    // Build path: [exe_dir]\[bank_title].wts
+    wcscpy(outPath, g_exePath);
+    wchar_t* pSlash = wcsrchr(outPath, L'\\');
+    if (pSlash) *(pSlash + 1) = L'\0';
+    wcscat(outPath, g_macroBankTitles[bankIndex]);
+    wcscat(outPath, SCRIPT_EXTENSION);
 }
 
-void LoadMacroScript(int bankIndex, const wchar_t* path) {
+void LoadMacroScript(int bankIndex) {
     if (bankIndex < 0 || bankIndex >= MACRO_BANK_COUNT) return;
-    FILE* f = _wfopen(path, L"r"); if (!f) return;
-    g_macroScriptCount[bankIndex] = 0; g_macroScriptHasStop[bankIndex] = FALSE;
-    wchar_t line[MAX_LINE_LEN]; DWORD defaultDelay = 0; BOOL firstLine = TRUE;
-
+    
+    wchar_t scriptPath[MAX_PATH];
+    GetMacroScriptPath(bankIndex, scriptPath, MAX_PATH);
+    
+    if (_waccess(scriptPath, 0) != 0) {
+        // File doesn't exist
+        g_macroScriptCount[bankIndex] = 0;
+        g_macroScriptHasStop[bankIndex] = FALSE;
+        return;
+    }
+    
+    FILE* f = _wfopen(scriptPath, L"r, ccs=UTF-8");
+    if (!f) {
+        g_macroScriptCount[bankIndex] = 0;
+        return;
+    }
+    
+    g_macroScriptCount[bankIndex] = 0;
+    g_macroScriptHasStop[bankIndex] = FALSE;
+    wchar_t line[MAX_LINE_LEN];
+    DWORD defaultDelay = 0;
+    BOOL firstLine = TRUE;
+    
     while (fgetws(line, MAX_LINE_LEN, f)) {
         size_t len = wcslen(line);
         while (len > 0 && (line[len-1] == L'\n' || line[len-1] == L'\r')) line[--len] = L'\0';
         if (len == 0) continue;
-
+        
         if (firstLine) {
-            wchar_t* endPtr; long val = wcstol(line, &endPtr, 10);
-            if (*endPtr == L'\0' && val >= 0) { defaultDelay = (DWORD)val; firstLine = FALSE; continue; }
+            wchar_t* endPtr;
+            long val = wcstol(line, &endPtr, 10);
+            if (*endPtr == L'\0' && val >= 0) {
+                defaultDelay = (DWORD)val;
+                firstLine = FALSE;
+                continue;
+            }
             firstLine = FALSE;
         }
-        if (wcsncmp(line, L"#DELAY ", 6) == 0) { wchar_t* numPart = line + 6; while (*numPart == L' ') numPart++; defaultDelay = _wtol(numPart); continue; }
-        if (wcscmp(line, L"#STOP") == 0) { g_macroScriptHasStop[bankIndex] = TRUE; continue; }
+        if (wcsncmp(line, L"#DELAY ", 6) == 0) {
+            wchar_t* numPart = line + 6;
+            while (*numPart == L' ') numPart++;
+            defaultDelay = _wtol(numPart);
+            continue;
+        }
+        if (wcscmp(line, L"#STOP") == 0) {
+            g_macroScriptHasStop[bankIndex] = TRUE;
+            continue;
+        }
         if (line[0] == L'#') continue;
-
+        
         if (g_macroScriptCount[bankIndex] < MAX_SCRIPT_LINES) {
             wcscpy(g_macroScriptItems[bankIndex][g_macroScriptCount[bankIndex]].command, line);
             g_macroScriptItems[bankIndex][g_macroScriptCount[bankIndex]].delay = defaultDelay;
             g_macroScriptCount[bankIndex]++;
         }
     }
-    fclose(f); g_macroScriptIndex[bankIndex] = 0;
+    fclose(f);
+    g_macroScriptIndex[bankIndex] = 0;
 }
 
 void StopMacroScript(int bankIndex) {
@@ -1364,6 +1721,24 @@ void RunNextMacroScriptCommand(int bankIndex) {
     BYTE binBuf[1024]; UINT cp = get_selected_codepage();
     DWORD binLen = parse_text_with_inline_hex(cmd, binBuf, sizeof(binBuf), cp);
 
+    if (binLen == 0) {
+        if (wcschr(cmd, L'`') != NULL) {
+            MessageBoxW(g_hwndMacroPads[bankIndex], L"Ошибка в inline-данных макроса!\r\n"
+                       L"Проверьте синтаксис внутри обратных кавычек.\r\n\r\n"
+                       L"Правила:\r\n"
+                       L"1 символ - ошибка\r\n"
+                       L"2 символа - HEX (AA)\r\n"
+                       L"3 символа - DEC 000..255 (011)\r\n"
+                       L"4+ символов - HEX чётной длины (0D0A)\r\n"
+                       L"Разделители: пробел, запятая, точка",
+                        L"Ошибка парсинга", MB_ICONERROR|MB_OK);
+            StopMacroScript(bankIndex);
+            return;
+        }
+        StopMacroScript(bankIndex);
+        return;
+    }
+
     if (binLen > 0) {
         EnterCriticalSection(&g_csComm);
         OVERLAPPED ovWrite = {0}; ovWrite.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
@@ -1383,7 +1758,9 @@ void RunNextMacroScriptCommand(int bankIndex) {
                 if (is_tx_hex_echo_enabled()) { append_echo_hex_dump(binBuf, binLen); }
                 append_echo_text(L"\r\n");
             }
-        } else { MessageBoxW(g_hwndMacroPads[bankIndex], L"Ошибка отправки!", L"Ошибка", MB_ICONERROR | MB_OK); }
+        } else {
+            MessageBoxW(g_hwndMacroPads[bankIndex], L"Ошибка отправки!", L"Ошибка", MB_ICONERROR | MB_OK);
+        }
     }
 
     g_macroScriptIndex[bankIndex]++;
@@ -1400,6 +1777,88 @@ void UpdateMacroScriptUI(HWND hwnd, int bankIndex) {
     HWND hRunBtn = GetDlgItem(hwnd, IDC_MACRO_BTN_RUN);
     if (hRunBtn) SetWindowTextW(hRunBtn, g_macroScriptRunning[bankIndex] ? L"STOP" : L"RUN");
 }
+
+void RenameMacroScriptFile(int bankIndex, const wchar_t* newTitle) {
+    if (bankIndex < 0 || bankIndex >= MACRO_BANK_COUNT) return;
+    if (!newTitle || wcslen(newTitle) == 0) return;
+    
+    wchar_t oldPath[MAX_PATH], newPath[MAX_PATH];
+    wchar_t oldTitle[MAX_MACRO_TITLE_LEN];
+    wcscpy(oldTitle, g_macroBankTitles[bankIndex]);
+    
+    // Build paths
+    GetMacroScriptPath(bankIndex, oldPath, MAX_PATH);
+    
+    // Temporarily change title to build new path
+    wchar_t tempTitle[MAX_MACRO_TITLE_LEN];
+    wcscpy(tempTitle, g_macroBankTitles[bankIndex]);
+    wcscpy(g_macroBankTitles[bankIndex], newTitle);
+    GetMacroScriptPath(bankIndex, newPath, MAX_PATH);
+    wcscpy(g_macroBankTitles[bankIndex], tempTitle);
+    
+    // Check if new file already exists
+    if (_waccess(newPath, 0) == 0 && _wcsicmp(oldPath, newPath) != 0) {
+        wchar_t msg[512];
+        swprintf(msg, sizeof(msg)/sizeof(wchar_t),
+            L"Файл '%ls.wts' уже существует в папке программы.\n"
+            L"Пожалуйста, выберите другое имя для этого банка.",
+            newTitle);
+        MessageBoxW(NULL, msg, L"Конфликт имён", MB_ICONWARNING | MB_OK);
+        return;
+    }
+    
+    // Check if old file exists
+    BOOL oldExists = (_waccess(oldPath, 0) == 0);
+    
+    if (oldExists && _wcsicmp(oldPath, newPath) != 0) {
+        if (_wrename(oldPath, newPath) != 0) {
+            MessageBoxW(NULL, L"Не удалось переименовать файл скрипта!", L"Ошибка", MB_ICONERROR | MB_OK);
+            return;
+        }
+    } else if (!oldExists && !_waccess(newPath, 0) == 0) {
+        // No files - just update title
+    }
+    
+    // Update title
+    wcscpy(g_macroBankTitles[bankIndex], newTitle);
+    SaveMacroBankTitle(bankIndex);
+    UpdateMacroButtonTitle(bankIndex);
+    
+    // Update window title with EXE name
+    if (g_hwndMacroPads[bankIndex] && IsWindow(g_hwndMacroPads[bankIndex])) {
+        wchar_t title[128];
+        wchar_t exeName[MAX_PATH];
+        wcscpy(exeName, g_exeName);
+        wcscat(exeName, L".exe");
+        
+        swprintf(title, sizeof(title)/sizeof(wchar_t), 
+                 L"Macros %ls (RUN/EDIT | LABEL/CMD) | %ls", 
+                 g_macroBankTitles[bankIndex], exeName);
+        SetWindowTextW(g_hwndMacroPads[bankIndex], title);
+    }
+}
+
+void CheckScriptFileConsistency(void) {
+    // Check global script
+    wchar_t globalPath[MAX_PATH];
+    GetGlobalScriptPath(globalPath, MAX_PATH);
+    wcscpy(g_globalScriptPath, globalPath);
+    
+    // Check macro scripts
+    for (int i = 0; i < MACRO_BANK_COUNT; i++) {
+        wchar_t scriptPath[MAX_PATH];
+        GetMacroScriptPath(i, scriptPath, MAX_PATH);
+        
+        // If file exists but bank not loaded, load it
+        if (_waccess(scriptPath, 0) == 0 && !g_macroBankLoaded[i]) {
+            LoadMacroBank(i);
+        }
+    }
+}
+
+// ====================================================================================================
+// Macro System
+// ====================================================================================================
 
 void LoadMacroBankTitles(void) {
     for (int bankIndex = 0; bankIndex < MACRO_BANK_COUNT; bankIndex++) {
@@ -1467,6 +1926,21 @@ void SendMacroCommand(int bankIndex, int slotIndex) {
 
     BYTE binBuf[1024]; UINT cp = get_selected_codepage();
     DWORD binLen = parse_text_with_inline_hex(slot->command, binBuf, sizeof(binBuf), cp);
+
+    if (binLen == 0) {
+        if (wcschr(slot->command, L'`') != NULL) {
+            MessageBoxW(g_hwndMacroPads[bankIndex], L"Ошибка в inline-данных макроса!\r\n"
+                       L"Проверьте синтаксис внутри обратных кавычек.\r\n\r\n"
+                       L"Правила:\r\n"
+                       L"1 символ - ошибка\r\n"
+                       L"2 символа - HEX (AA)\r\n"
+                       L"3 символа - DEC 000..255 (011)\r\n"
+                       L"4+ символов - HEX чётной длины (0D0A)\r\n"
+                       L"Разделители: пробел, запятая, точка",
+                        L"Ошибка парсинга", MB_ICONERROR|MB_OK);
+        }
+        return;
+    }
 
     if (binLen > 0) {
         EnterCriticalSection(&g_csComm);
@@ -1672,22 +2146,23 @@ void LayoutButtons(HWND hwnd) {
         if (hBtn) MoveWindow(hBtn, x, y, btnW, btnH, TRUE);
     }
 
+    // Кнопки скриптов: [?] [SCRIPT] [RUN] - слева
     int scriptY = h - margin - 26;
-    int btnScriptW = 45; int scriptInfoW = 22; int spacing = 4;
-    HWND hScriptPath = GetDlgItem(hwnd, IDC_MACRO_SCRIPT_PATH);
+    int scriptInfoW = 22;      // кнопка "?"
+    int scriptEditW = 56;      // кнопка "SCRIPT"
+    int scriptRunW = 45;       // кнопка "RUN"
+    int spacing = 4;
+    
     HWND hScriptInfoBtn = GetDlgItem(hwnd, IDC_MACRO_BTN_SCRIPT_INFO);
-    HWND hLoadBtn = GetDlgItem(hwnd, IDC_MACRO_BTN_LOAD);
-    HWND hRunBtn = GetDlgItem(hwnd, IDC_MACRO_BTN_RUN);
-    HWND hEditBtn = GetDlgItem(hwnd, IDC_MACRO_BTN_EDIT);
+    HWND hEditBtnScript = GetDlgItem(hwnd, IDC_MACRO_BTN_EDIT);
+    HWND hRunBtnScript = GetDlgItem(hwnd, IDC_MACRO_BTN_RUN);
 
-    int totalBtnsW = scriptInfoW + spacing + (btnScriptW + spacing) * 4;
-    int pathW = availW - totalBtnsW; if (pathW < 40) pathW = 40;
+    // Прижимаем к левому краю
+    int startX = margin;
 
-    if (hScriptPath) MoveWindow(hScriptPath, margin, scriptY, pathW, 22, TRUE);
-    if (hScriptInfoBtn) MoveWindow(hScriptInfoBtn, margin + pathW + spacing, scriptY, scriptInfoW, 22, TRUE);
-    if (hLoadBtn) MoveWindow(hLoadBtn, margin + pathW + spacing + scriptInfoW + spacing, scriptY, btnScriptW, 22, TRUE);
-    if (hRunBtn) MoveWindow(hRunBtn, margin + pathW + spacing + scriptInfoW + spacing + (btnScriptW + spacing), scriptY, btnScriptW, 22, TRUE);
-    if (hEditBtn) MoveWindow(hEditBtn, margin + pathW + spacing + scriptInfoW + spacing + (btnScriptW + spacing) * 2, scriptY, btnScriptW, 22, TRUE);
+    if (hScriptInfoBtn) MoveWindow(hScriptInfoBtn, startX, scriptY, scriptInfoW, 22, TRUE);
+    if (hEditBtnScript) MoveWindow(hEditBtnScript, startX + scriptInfoW + spacing, scriptY, scriptEditW, 22, TRUE);
+    if (hRunBtnScript) MoveWindow(hRunBtnScript, startX + scriptInfoW + spacing + scriptEditW + spacing, scriptY, scriptRunW, 22, TRUE);
 
     RedrawWindow(hwnd, NULL, NULL, RDW_ERASE | RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN);
 }
@@ -1707,11 +2182,11 @@ LRESULT CALLBACK MacroPadWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             ctx->hTitleFont = CreateTitleFont(-15); SendMessage(ctx->hTitleEdit, WM_SETFONT, (WPARAM)ctx->hTitleFont, TRUE);
             if (wcslen(g_macroBankTitles[bankIdx]) == 0) SetWindowTextW(ctx->hTitleEdit, L"");
 
-            ctx->hModeBtn = CreateWindowExW(0, L"BUTTON", L"RUN", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 55, 25, hwnd, (HMENU)IDC_BTN_MACRO_MODE, NULL, NULL);
+            ctx->hModeBtn = CreateWindowExW(0, L"BUTTON", L"R->E", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 55, 25, hwnd, (HMENU)IDC_BTN_MACRO_MODE, NULL, NULL);
             SendMessage(ctx->hModeBtn, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
             ctx->hDispBtn = CreateWindowExW(0, L"BUTTON", L"LABEL", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 60, 0, 55, 25, hwnd, (HMENU)IDC_BTN_MACRO_DISPLAY, NULL, NULL);
             SendMessage(ctx->hDispBtn, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
-            ctx->hStatusLbl = CreateWindowExW(0, L"STATIC", L"Режим: RUN MODE", WS_CHILD | WS_VISIBLE | SS_LEFT, 0, 0, 250, 16, hwnd, (HMENU)IDC_STATIC_MACRO_STATUS, NULL, NULL);
+            ctx->hStatusLbl = CreateWindowExW(0, L"STATIC", L"MODE: RUN", WS_CHILD | WS_VISIBLE | SS_LEFT, 0, 0, 250, 16, hwnd, (HMENU)IDC_STATIC_MACRO_STATUS, NULL, NULL);
             SendMessage(ctx->hStatusLbl, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
 
             for (int i = 0; i < MACROS_PER_BANK; i++) {
@@ -1724,20 +2199,15 @@ LRESULT CALLBACK MacroPadWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 if (hBtn) SendMessage(hBtn, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
             }
 
-            ctx->hScriptPath = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_READONLY | WS_BORDER, 0, 0, 10, 22, hwnd, (HMENU)IDC_MACRO_SCRIPT_PATH, NULL, NULL);
-            SendMessage(ctx->hScriptPath, WM_SETFONT, (WPARAM)g_hMonoFont, TRUE);
+            // Кнопки скриптов: [?] [SCRIPT] [RUN]
             ctx->hScriptInfoBtn = CreateWindowExW(0, L"BUTTON", L"?", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 22, 22, hwnd, (HMENU)IDC_MACRO_BTN_SCRIPT_INFO, NULL, NULL);
             SendMessage(ctx->hScriptInfoBtn, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
-            ctx->hLoadBtn = CreateWindowExW(0, L"BUTTON", L"LOAD", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 45, 22, hwnd, (HMENU)IDC_MACRO_BTN_LOAD, NULL, NULL);
-            SendMessage(ctx->hLoadBtn, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
+            
+            ctx->hEditBtn = CreateWindowExW(0, L"BUTTON", L"SCRIPT", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 56, 22, hwnd, (HMENU)IDC_MACRO_BTN_EDIT, NULL, NULL);
+            SendMessage(ctx->hEditBtn, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
+            
             ctx->hRunBtn = CreateWindowExW(0, L"BUTTON", L"RUN", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 45, 22, hwnd, (HMENU)IDC_MACRO_BTN_RUN, NULL, NULL);
             SendMessage(ctx->hRunBtn, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
-            ctx->hEditBtn = CreateWindowExW(0, L"BUTTON", L"EDIT", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 45, 22, hwnd, (HMENU)IDC_MACRO_BTN_EDIT, NULL, NULL);
-            SendMessage(ctx->hEditBtn, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
-
-            wchar_t scriptPath[MAX_PATH]; GetMacroScriptPath(bankIdx, scriptPath, MAX_PATH); SetWindowTextW(ctx->hScriptPath, scriptPath);
-            BOOL hasTitle = (wcslen(g_macroBankTitles[bankIdx]) > 0);
-            EnableWindow(ctx->hLoadBtn, hasTitle); EnableWindow(ctx->hRunBtn, hasTitle); EnableWindow(ctx->hEditBtn, hasTitle);
 
             ApplyThemeToWindow(hwnd); LayoutButtons(hwnd); return 0;
         }
@@ -1754,21 +2224,37 @@ LRESULT CALLBACK MacroPadWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             int id = LOWORD(wp);
 
             if (id == IDC_BTN_MACRO_MODE) {
-                g_editMode = !g_editMode;
-                SetWindowTextW(ctx->hModeBtn, g_editMode ? L"EDIT" : L"RUN");
-                InvalidateRect(ctx->hModeBtn, NULL, TRUE);
-                if (ctx->hStatusLbl) {
-                    SetWindowTextW(ctx->hStatusLbl, g_editMode ? L"Режим: EDIT MODE" : L"Режим: RUN MODE");
-                    InvalidateRect(ctx->hStatusLbl, NULL, TRUE);
-                }
-                if (ctx->hTitleEdit) {
-                    if (g_editMode) { EnableWindow(ctx->hTitleEdit, TRUE); SetFocus(ctx->hTitleEdit); SendMessage(ctx->hTitleEdit, EM_SETSEL, 0, -1); }
-                    else { EnableWindow(ctx->hTitleEdit, FALSE); SendMessage(ctx->hTitleEdit, EM_SETSEL, 0, 0); }
-                    InvalidateRect(ctx->hTitleEdit, NULL, TRUE); UpdateWindow(ctx->hTitleEdit);
-                }
-                if (!g_editMode && g_hwndMacroEdit) { CloseMacroEdit(); }
-                return 0;
-            }
+			    g_editMode = !g_editMode;
+			    
+			    // Меняем надпись на кнопке
+			    SetWindowTextW(ctx->hModeBtn, g_editMode ? L"E->R" : L"R->E");
+			    InvalidateRect(ctx->hModeBtn, NULL, TRUE);
+			    
+			    // Меняем статус
+			    if (ctx->hStatusLbl) {
+			        SetWindowTextW(ctx->hStatusLbl, g_editMode ? L"MODE: EDIT" : L"MODE: RUN");
+			        InvalidateRect(ctx->hStatusLbl, NULL, TRUE);
+			    }
+			    
+			    // Включаем/выключаем редактирование названия банка
+			    if (ctx->hTitleEdit) {
+			        if (g_editMode) { 
+			            EnableWindow(ctx->hTitleEdit, TRUE); 
+			            SetFocus(ctx->hTitleEdit); 
+			            SendMessage(ctx->hTitleEdit, EM_SETSEL, 0, -1); 
+			        } else { 
+			            EnableWindow(ctx->hTitleEdit, FALSE); 
+			            SendMessage(ctx->hTitleEdit, EM_SETSEL, 0, 0); 
+			        }
+			        InvalidateRect(ctx->hTitleEdit, NULL, TRUE); 
+			        UpdateWindow(ctx->hTitleEdit);
+			    }
+			    
+			    if (!g_editMode && g_hwndMacroEdit) { 
+			        CloseMacroEdit(); 
+			    }
+			    return 0;
+			}
 
             if (id == IDC_BTN_MACRO_DISPLAY) {
                 g_showCommand = !g_showCommand;
@@ -1785,66 +2271,115 @@ LRESULT CALLBACK MacroPadWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
 
-            if (id == IDC_MACRO_BTN_SCRIPT_INFO) {
-                static const wchar_t scriptHelp[] =
-                    L"Справка по скриптам:\r\n"
-                    L"=========================================\r\n\r\n"
-                    L"Формат файла (.txt):\r\n"
-                    L"Каждая строка - одна команда.\r\n"
-                    L"Поддерживается инлайн-HEX (`XX`).\r\n\r\n"
-                    L"Директивы:\r\n"
-                    L"1000        - глобальная задержка (мс)\r\n"
-                    L"(только в первой строке)\r\n"
-                    L"#DELAY 500  - задержка перед след. командой\r\n"
-                    L"#STOP       - остановить скрипт\r\n"
-                    L"#...        - комментарий (игнорируется)\r\n\r\n"
-                    L"Без #STOP скрипт выполняется циклически.";
-                HWND hInfo = CreateWindowExW(WS_EX_TOOLWINDOW, L"WT232_Info_Scroll_Class",
-                                             L"Справка: Скрипты", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-                                             CW_USEDEFAULT, CW_USEDEFAULT, 380, 450,
-                                             hwnd, NULL, GetModuleHandle(NULL), (LPVOID)scriptHelp);
-                if (hInfo) { ShowWindow(hInfo, SW_SHOW); UpdateWindow(hInfo); ApplyThemeToWindow(hInfo); }
+           // Кнопка справки в окне макросов
+			if (id == IDC_MACRO_BTN_SCRIPT_INFO) {
+			    static const wchar_t macroHelp[] =
+			        L"Справка по макросам и скриптам\r\n"
+			        L"=========================================\r\n\r\n"
+			        L"МАКРОСЫ:\r\n"
+			        L"---------\r\n"
+			        L"• 5 банков по 24 ячейки (4x6)\r\n"
+			        L"• Кнопка R->E / E->R:\r\n"
+			        L"  - R->E = переключиться в режим редактирования\r\n"
+			        L"  - E->R = переключиться в режим выполнения\r\n"
+			        L"• MODE: RUN  - режим выполнения (клик по ячейке отправляет команду)\r\n"
+			        L"• MODE: EDIT - режим редактирования (клик по ячейке открывает редактор)\r\n"
+			        L"• В режиме EDIT можно изменять названия ячеек и команд\r\n"
+			        L"• Кнопка LABEL/CMD переключает отображение (имя/команда)\r\n"
+			        L"• Название банка можно изменить в режиме EDIT\r\n"
+			        L"• При переименовании банка автоматически переименовывается файл скрипта\r\n"
+			        L"\r\n"
+			        L"СКРИПТЫ МАКРОСОВ:\r\n"
+			        L"-----------------\r\n"
+			        L"• Файл скрипта: [название_банка].wts\r\n"
+			        L"• Создаётся автоматически при нажатии SCRIPT\r\n"
+			        L"• Каждая строка - одна команда\r\n"
+			        L"• Поддерживается инлайн-HEX/DEC внутри `...`\r\n"
+			        L"\r\n"
+			        L"ДИРЕКТИВЫ СКРИПТОВ:\r\n"
+			        L"-------------------\r\n"
+			        L"1000        - глобальная задержка (мс) в первой строке\r\n"
+			        L"#DELAY 500  - задержка перед следующей командой\r\n"
+			        L"#STOP       - остановить скрипт\r\n"
+			        L"#...        - комментарий (игнорируется)\r\n"
+			        L"\r\n"
+			        L"Без #STOP скрипт выполняется циклически.\r\n"
+			        L"\r\n"
+			        L"INLINE-СИНТАКСИС (внутри `...`):\r\n"
+			        L"=========================================\r\n"
+			        L"2 символа  = HEX (AA)\r\n"
+			        L"3 символа  = DEC 000..255 (011)\r\n"
+			        L"4+ символов = HEX чётной длины (0D0A)\r\n"
+			        L"Разделители: пробел, запятая, точка\r\n"
+			        L"\r\n"
+			        L"ПРИМЕРЫ:\r\n"
+			        L"---------\r\n"
+			        L"  AT\r\n"
+			        L"  AT+BAUD=9600\r\n"
+			        L"  `0D0A`          -> CR+LF\r\n"
+			        L"  `011 001 255`   -> 0B 01 FF\r\n"
+			        L"  `AA,bb,123.01`  -> AA BB 7B 01";
+			    
+			    HWND hInfo = CreateWindowExW(WS_EX_TOOLWINDOW, L"WT232_Info_Scroll_Class",
+			                                 L"Справка: Макросы и скрипты", 
+			                                 WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+			                                 CW_USEDEFAULT, CW_USEDEFAULT, 460, 580,
+			                                 hwnd, NULL, GetModuleHandle(NULL), (LPVOID)macroHelp);
+			    if (hInfo) { ShowWindow(hInfo, SW_SHOW); UpdateWindow(hInfo); ApplyThemeToWindow(hInfo); }
+			    return 0;
+			}
+
+            // Macro script EDIT button
+            if (id == IDC_MACRO_BTN_EDIT) {
+                wchar_t scriptPath[MAX_PATH];
+                GetMacroScriptPath(ctx->bankIndex, scriptPath, MAX_PATH);
+                OpenScriptFile(hwnd, scriptPath);
                 return 0;
             }
 
-            if (id == IDC_MACRO_BTN_LOAD) {
-                OPENFILENAMEW ofn; wchar_t szFile[MAX_PATH] = L"";
-                ZeroMemory(&ofn, sizeof(ofn));
-                ofn.lStructSize = sizeof(ofn); ofn.hwndOwner = hwnd;
-                ofn.lpstrFile = szFile; ofn.nMaxFile = MAX_PATH;
-                ofn.lpstrFilter = L"Text Files (*.txt)\0*.txt\0All Files (*.*)\0*.*\0";
-                ofn.nFilterIndex = 1; ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
-                if (GetOpenFileNameW(&ofn)) {
-                    LoadMacroScript(ctx->bankIndex, szFile);
-                    SetWindowTextW(ctx->hScriptPath, szFile);
-                    UpdateMacroScriptUI(hwnd, ctx->bankIndex);
-                }
-                return 0;
-            }
-
+            // Macro script RUN button
             if (id == IDC_MACRO_BTN_RUN) {
-                if (g_macroScriptRunning[ctx->bankIndex]) { StopMacroScript(ctx->bankIndex); }
-                else {
+                // Check if script file exists
+                wchar_t scriptPath[MAX_PATH];
+                GetMacroScriptPath(ctx->bankIndex, scriptPath, MAX_PATH);
+                
+                if (_waccess(scriptPath, 0) != 0) {
+                    wchar_t msg[256];
+                    swprintf(msg, sizeof(msg)/sizeof(wchar_t),
+                        L"Файл скрипта '%ls.wts' не найден.\nСоздайте его через кнопку SCRIPT.",
+                        g_macroBankTitles[ctx->bankIndex]);
+                    MessageBoxW(hwnd, msg, L"Файл не найден", MB_ICONWARNING | MB_OK);
+                    return 0;
+                }
+                
+                LoadMacroScript(ctx->bankIndex);
+                
+                if (g_macroScriptRunning[ctx->bankIndex]) {
+                    StopMacroScript(ctx->bankIndex);
+                } else {
                     if (g_macroScriptCount[ctx->bankIndex] > 0) {
                         g_macroScriptRunning[ctx->bankIndex] = TRUE;
                         UpdateMacroScriptUI(hwnd, ctx->bankIndex);
                         RunNextMacroScriptCommand(ctx->bankIndex);
-                    } else { MessageBoxW(hwnd, L"Сначала загрузите скрипт!", L"Внимание", MB_ICONWARNING | MB_OK); }
+                    } else {
+                        MessageBoxW(hwnd, L"Скрипт пуст! Добавьте команды в файл.", L"Внимание", MB_ICONWARNING | MB_OK);
+                    }
                 }
-                return 0;
-            }
-
-            if (id == IDC_MACRO_BTN_EDIT) {
-                wchar_t path[MAX_PATH]; GetMacroScriptPath(ctx->bankIndex, path, MAX_PATH);
-                if (wcslen(path) > 0) { ShellExecuteW(hwnd, L"open", path, NULL, NULL, SW_SHOWNORMAL); }
                 return 0;
             }
 
             if (id == IDC_EDIT_MACRO_TITLE) {
                 if (HIWORD(wp) == EN_CHANGE && g_editMode) {
-                    GetWindowTextW(ctx->hTitleEdit, g_macroBankTitles[ctx->bankIndex], MAX_MACRO_TITLE_LEN);
-                    SaveMacroBankTitle(ctx->bankIndex);
-                    UpdateMacroButtonTitle(ctx->bankIndex);
+                    wchar_t newTitle[MAX_MACRO_TITLE_LEN];
+                    GetWindowTextW(ctx->hTitleEdit, newTitle, MAX_MACRO_TITLE_LEN);
+                    
+                    // Check if title changed
+                    if (_wcsicmp(newTitle, g_macroBankTitles[ctx->bankIndex]) != 0) {
+                        // Try to rename script file
+                        RenameMacroScriptFile(ctx->bankIndex, newTitle);
+                        // If rename succeeded, title already updated; if failed, title restored
+                        UpdateMacroButtonTitle(ctx->bankIndex);
+                    }
                 }
                 return 0;
             }
@@ -1875,11 +2410,24 @@ void ShowMacroPad(HWND hParent, int bankIndex) {
     int screenW = GetSystemMetrics(SM_CXSCREEN), screenH = GetSystemMetrics(SM_CYSCREEN);
     if (x + w > screenW) x = screenW - w - 10; if (y + h > screenH) y = screenH - h - 10; if (x < 0) x = 0; if (y < 0) y = 0;
 
-    wchar_t title[64]; swprintf(title, 64, L"Macros M%d (RUN/EDIT | LABEL/CMD)", bankIndex + 1);
+    // Формируем заголовок с именем EXE файла
+    wchar_t title[128];
+    wchar_t exeName[MAX_PATH];
+    wcscpy(exeName, g_exeName);
+    wcscat(exeName, L".exe");
+    
+    swprintf(title, sizeof(title)/sizeof(wchar_t), 
+             L"Macros %ls (RUN/EDIT | LABEL/CMD) | %ls", 
+             g_macroBankTitles[bankIndex], exeName);
+    
     g_hwndMacroPads[bankIndex] = CreateWindowExW(WS_EX_TOOLWINDOW, L"WT232_MacroPad_Class", title,
                                                  WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_THICKFRAME | WS_CLIPCHILDREN,
                                                  x, y, w, h, hParent, NULL, GetModuleHandle(NULL), (LPVOID)(LONG_PTR)bankIndex);
-    if (g_hwndMacroPads[bankIndex]) { ShowWindow(g_hwndMacroPads[bankIndex], SW_SHOW); UpdateWindow(g_hwndMacroPads[bankIndex]); ApplyThemeToWindow(g_hwndMacroPads[bankIndex]); }
+    if (g_hwndMacroPads[bankIndex]) { 
+        ShowWindow(g_hwndMacroPads[bankIndex], SW_SHOW); 
+        UpdateWindow(g_hwndMacroPads[bankIndex]); 
+        ApplyThemeToWindow(g_hwndMacroPads[bankIndex]); 
+    }
 }
 
 // ====================================================================================================
@@ -1887,9 +2435,22 @@ void ShowMacroPad(HWND hParent, int bankIndex) {
 // ====================================================================================================
 
 void InitIniPaths(void) {
-    GetModuleFileNameW(NULL, g_iniPath, MAX_PATH);
-    wchar_t* pDot = wcsrchr(g_iniPath, L'.'); if (pDot) *pDot = L'\0';
-    wcscat(g_iniPath, L".ini"); wcscpy(g_iniBackupPath, g_iniPath); wcscat(g_iniBackupPath, L".bak");
+    GetModuleFileNameW(NULL, g_exePath, MAX_PATH);
+    
+    // Get EXE name without extension
+    wcscpy(g_exeName, g_exePath);
+    wchar_t* pExt = wcsrchr(g_exeName, L'.');
+    if (pExt) *pExt = L'\0';
+    wchar_t* pSlash = wcsrchr(g_exeName, L'\\');
+    if (pSlash) wcscpy(g_exeName, pSlash + 1);
+    
+    // INI path
+    wcscpy(g_iniPath, g_exePath);
+    pExt = wcsrchr(g_iniPath, L'.');
+    if (pExt) *pExt = L'\0';
+    wcscat(g_iniPath, L".ini");
+    wcscpy(g_iniBackupPath, g_iniPath); 
+    wcscat(g_iniBackupPath, L".bak");
 }
 
 BOOL ReadIniString(const wchar_t* section, const wchar_t* key, wchar_t* out, int maxLen, const wchar_t* defVal) { DWORD res = GetPrivateProfileStringW(section, key, defVal, out, maxLen, g_iniPath); return (res > 0) ? TRUE : FALSE; }
@@ -1902,9 +2463,14 @@ BOOL ValidateIni(void) { int baudrate = ReadIniInt(L"Port", L"LastBaudrate", -1)
 BOOL ReadAllIni(void) {
     if (!ValidateIni()) {
         if (ReadIniString(L"Port", L"LastPortName", g_wTxtBuf, 10, L"") > 0) {
-            if (ValidateIni()) { CopyFileW(g_iniBackupPath, g_iniPath, FALSE); MessageBoxW(NULL, L"Восстановлены настройки из резервной копии.", L"Восстановление", MB_OK); return TRUE; }
+            if (ValidateIni()) { 
+                CopyFileW(g_iniBackupPath, g_iniPath, FALSE); 
+                MessageBoxW(NULL, L"Восстановлены настройки из резервной копии.", L"Восстановление", MB_OK); 
+                return TRUE; 
+            }
         }
-        CreateDefaultIni(); return FALSE;
+        CreateDefaultIni(); 
+        return FALSE;
     }
     return TRUE;
 }
@@ -1950,7 +2516,9 @@ void WriteAllIni(void) {
     if (g_hComboDataBits) WriteIniInt(L"Port", L"LastDataBits", (int)SendMessageW(g_hComboDataBits, CB_GETCURSEL, 0, 0) + 5);
     if (g_hComboParity) WriteIniInt(L"Port", L"LastParity", (int)SendMessageW(g_hComboParity, CB_GETCURSEL, 0, 0));
     if (g_hComboStopBits) WriteIniInt(L"Port", L"LastStopBits", (int)SendMessageW(g_hComboStopBits, CB_GETCURSEL, 0, 0));
-    if (g_hComboFlow) WriteIniInt(L"Port", L"LastFlow", (int)SendMessageW(g_hComboFlow, CB_GETCURSEL, 0, 0));
+    if (g_hComboFlow) {
+    WriteIniInt(L"Port", L"LastFlow", (int)SendMessageW(g_hComboFlow, CB_GETCURSEL, 0, 0));
+	}
     WriteIniString(L"Port", L"LastVID", g_session.targetDevice.vid);
     WriteIniString(L"Port", L"LastPID", g_session.targetDevice.pid);
     WriteIniString(L"Port", L"LastSerial", g_session.targetDevice.serial);
@@ -1986,7 +2554,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmd, int show) {
     WNDCLASSW ic = {0}; ic.lpfnWndProc = InfoWndProc; ic.hInstance = hInst; ic.hCursor = LoadCursor(NULL, IDC_ARROW);
     ic.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1); ic.lpszClassName = L"WT232_Info_Scroll_Class"; RegisterClassW(&ic);
 
-    wchar_t settingsTitle[128]; swprintf(settingsTitle, 128, L"WT232 Settings " APP_VERSION);
+    wchar_t settingsTitle[128]; swprintf(settingsTitle, 128, L"WT232 " APP_VERSION);
     g_hwndSettings = CreateWindowExW(WS_EX_TOPMOST, L"WT232_Settings_Class", settingsTitle,
                                      WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX | WS_CLIPCHILDREN,
                                      CW_USEDEFAULT, CW_USEDEFAULT, 300, 330, NULL, NULL, hInst, NULL);
@@ -2067,18 +2635,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             SendMessageW(g_hComboStopBits, CB_ADDSTRING, 0, (LPARAM)L"1.5");
             SendMessageW(g_hComboStopBits, CB_ADDSTRING, 0, (LPARAM)L"2");
 
-            // === УПР. ПОТОКОМ (ИСПРАВЛЕНОЕ РАСПОЛОЖЕНИЕ) ===
-            CreateWindowExW(0, L"STATIC", L"Упр. потоком:", WS_CHILD|WS_VISIBLE, 20, 178, 90, 20, hwnd, NULL, NULL, NULL);
-            // Кнопка ? расположена сразу после надписи "Упр. потоком:" (x=110),
-            // точно так же, как кнопка ? для Порта расположена после надписи "Порт:" (x=70)
-            HWND hBtnFlowInfo = CreateWindowExW(0, L"BUTTON", L"?", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 110, 174, 22, 22, hwnd, (HMENU)IDC_BTN_FLOW_INFO, NULL, NULL);
-            if (hBtnFlowInfo) SendMessage(hBtnFlowInfo, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
-            // Выпадающий список сдвинут правее кнопки справки
-            g_hComboFlow = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD|WS_VISIBLE|CBS_DROPDOWNLIST|WS_VSCROLL, 137, 175, 123, 200, hwnd, (HMENU)IDC_COMBO_FLOW, NULL, NULL);
-            SendMessageW(g_hComboFlow, CB_ADDSTRING, 0, (LPARAM)L"Нет / None");
-            SendMessageW(g_hComboFlow, CB_ADDSTRING, 0, (LPARAM)L"XON/XOFF");
-            SendMessageW(g_hComboFlow, CB_ADDSTRING, 0, (LPARAM)L"RTS/CTS");
-            SendMessageW(g_hComboFlow, CB_ADDSTRING, 0, (LPARAM)L"RS-485 (RTS Toggle)");
+            // === УПР. ПОТОКОМ ===
+			CreateWindowExW(0, L"STATIC", L"Flow:", WS_CHILD|WS_VISIBLE, 20, 178, 90, 20, hwnd, NULL, NULL, NULL);
+			HWND hBtnFlowInfo = CreateWindowExW(0, L"BUTTON", L"?", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 110, 174, 22, 22, hwnd, (HMENU)IDC_BTN_FLOW_INFO, NULL, NULL);
+			if (hBtnFlowInfo) SendMessage(hBtnFlowInfo, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
+			g_hComboFlow = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD|WS_VISIBLE|CBS_DROPDOWNLIST|WS_VSCROLL, 137, 175, 123, 200, hwnd, (HMENU)IDC_COMBO_FLOW, NULL, NULL);
+
+			// Новый порядок:
+			SendMessageW(g_hComboFlow, CB_ADDSTRING, 0, (LPARAM)L"NONE");
+			SendMessageW(g_hComboFlow, CB_ADDSTRING, 0, (LPARAM)L"RTS/CTS");
+			SendMessageW(g_hComboFlow, CB_ADDSTRING, 0, (LPARAM)L"XON/XOFF");
+			SendMessageW(g_hComboFlow, CB_ADDSTRING, 0, (LPARAM)L"RTS Toggle");
+			SendMessageW(g_hComboFlow, CB_ADDSTRING, 0, (LPARAM)L"RTS Toggle (Inverted)");
 
             // === КНОПКИ OK / ОТМЕНА ===
             CreateWindowExW(0, L"BUTTON", L"OK", WS_CHILD|WS_VISIBLE|BS_DEFPUSHBUTTON, 60, 215, 70, 35, hwnd, (HMENU)IDC_BTN_OK, NULL, NULL);
@@ -2124,27 +2692,32 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 case IDC_BTN_INFO: init_com_ports(hwnd, TRUE, NULL); break;
                 case IDC_BTN_FLOW_INFO: {
                     static const wchar_t flowHelp[] =
-                        L"Режимы управления потоком (Flow Control):\r\n"
-                        L"=========================================\r\n\r\n"
-                        L"Нет (None)\r\n"
-                        L"  Управление отсутствует. Используйте для простых\r\n"
-                        L"  TTL-переходников, отладки или когда линии RTS/CTS\r\n"
-                        L"  физически не подключены.\r\n\r\n"
-                        L"XON/XOFF\r\n"
-                        L"  Программное управление символами XON(0x11)/XOFF(0x13).\r\n"
-                        L"  Не требует дополнительных проводов. Может конфликтовать\r\n"
-                        L"  с передачей бинарных данных, содержащих эти коды.\r\n\r\n"
-                        L"RTS/CTS\r\n"
-                        L"  Классическое аппаратное рукопожатие. Устройство\r\n"
-                        L"  сигнализирует о готовности через RTS и проверяет\r\n"
-                        L"  готовность собеседника через CTS. Наиболее надежно\r\n"
-                        L"  для высокоскоростной передачи.\r\n\r\n"
-                        L"RS-485 (RTS Toggle)\r\n"
-                        L"  Линия RTS автоматически переключается драйвером:\r\n"
-                        L"  HIGH во время передачи (TX Enable), LOW в покое.\r\n"
-                        L"  Предназначено для полудуплексных шин RS-485,\r\n"
-                        L"  где одна пара проводов используется для RX и TX.\r\n"
-                        L"  Требует поддержки RTS_TOGGLE драйвером адаптера.";
+					    L"Режимы управления потоком (Flow Control):\r\n"
+					    L"=========================================\r\n\r\n"
+					    L"NONE\r\n"
+					    L"  Управление отсутствует. Используйте для простых\r\n"
+					    L"  TTL-переходников, отладки или когда линии RTS/CTS\r\n"
+					    L"  физически не подключены.\r\n\r\n"
+					    L"RTS/CTS\r\n"
+					    L"  Классическое аппаратное рукопожатие. Устройство\r\n"
+					    L"  сигнализирует о готовности через RTS и проверяет\r\n"
+					    L"  готовность собеседника через CTS. Наиболее надежно\r\n"
+					    L"  для высокоскоростной передачи.\r\n\r\n"
+					    L"XON/XOFF\r\n"
+					    L"  Программное управление символами XON(0x11)/XOFF(0x13).\r\n"
+					    L"  Не требует дополнительных проводов. Может конфликтовать\r\n"
+					    L"  с передачей бинарных данных, содержащих эти коды.\r\n\r\n"
+					    L"RTS Toggle\r\n"
+					    L"  Линия RTS автоматически переключается драйвером:\r\n"
+					    L"  HIGH во время передачи (TX Enable), LOW в покое.\r\n"
+					    L"  Предназначено для полудуплексных шин RS-485,\r\n"
+					    L"  где одна пара проводов используется для RX и TX.\r\n"
+					    L"  Требует поддержки RTS_TOGGLE драйвером адаптера.\r\n\r\n"
+					    L"RTS Toggle (Inverted)\r\n"
+					    L"  Инвертированная логика RTS:\r\n"
+					    L"  LOW во время передачи (TX Enable), HIGH в покое.\r\n"
+					    L"  Используется для некоторых RS-485 адаптеров,\r\n"
+					    L"  где управление направлением требует инвертированного сигнала.\r\n";
                     HWND hInfo = CreateWindowExW(WS_EX_TOOLWINDOW, L"WT232_Info_Scroll_Class",
                         L"Справка: Управление потоком",
                         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
@@ -2174,6 +2747,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                             StartRxTxThreads(g_hwndTerminal); ApplyThemeToWindow(g_hwndTerminal); UpdateAllMacroButtonTitles();
                             int state = ReadIniInt(L"Terminal", L"State", SW_SHOW);
                             ShowWindow(g_hwndTerminal, state); UpdateWindow(g_hwndTerminal);
+                            
+                            // Check script file consistency after terminal opens
+                            CheckScriptFileConsistency();
                         }
                     } else { MessageBoxW(hwnd, L"Не удалось открыть порт!", L"Ошибка", MB_ICONERROR|MB_OK); }
                     break;
@@ -2274,16 +2850,14 @@ LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             int repeatDelay = ReadIniInt(L"Terminal", L"RepeatDelay", 1000);
             wchar_t delayStr[32]; swprintf(delayStr, 32, L"%d", repeatDelay); SetWindowTextW(g_hEditDelay, delayStr);
 
-            g_hEditScriptPath = CreateWindowExW(0, L"EDIT", L"", WS_CHILD|WS_VISIBLE|ES_READONLY|WS_BORDER, 0, 0, 10, 22, hwnd, (HMENU)IDC_EDIT_SCRIPT_PATH, NULL, NULL);
-            SendMessage(g_hEditScriptPath, WM_SETFONT, (WPARAM)g_hMonoFont, TRUE);
-
+            // === SCRIPT CONTROLS: [?] [SCRIPT] [RUN] ===
             g_hBtnScriptInfo = CreateWindowExW(0, L"BUTTON", L"?", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 0, 0, 22, 22, hwnd, (HMENU)IDC_BTN_SCRIPT_INFO, NULL, NULL);
             SendMessage(g_hBtnScriptInfo, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
 
-            g_hBtnLoadScript = CreateWindowExW(0, L"BUTTON", L"LOAD", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 0, 0, 40, 22, hwnd, (HMENU)IDC_BTN_LOAD_SCRIPT, NULL, NULL);
-            SendMessage(g_hBtnLoadScript, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
+            g_hBtnEditScript = CreateWindowExW(0, L"BUTTON", L"SCRIPT", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 0, 0, 56, 22, hwnd, (HMENU)IDC_BTN_EDIT_SCRIPT, NULL, NULL);
+            SendMessage(g_hBtnEditScript, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
 
-            g_hBtnRunScript = CreateWindowExW(0, L"BUTTON", L"RUN", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 0, 0, 40, 22, hwnd, (HMENU)IDC_BTN_RUN_SCRIPT, NULL, NULL);
+            g_hBtnRunScript = CreateWindowExW(0, L"BUTTON", L"RUN", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 0, 0, 45, 22, hwnd, (HMENU)IDC_BTN_RUN_SCRIPT, NULL, NULL);
             SendMessage(g_hBtnRunScript, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
 
             {
@@ -2316,12 +2890,17 @@ LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g_rxMode = ReadIniInt(L"Terminal", L"RxMode", RX_MODE_TEXT);
             update_rx_mode_ui();
             ApplyThemeToWindow(hwnd);
+            
+            // Get global script path on startup
+            GetGlobalScriptPath(g_globalScriptPath, MAX_PATH);
+            
             return 0;
         }
         case WM_SIZE: {
             int w = LOWORD(lp), h = HIWORD(lp);
             int margin = 15, barH = 28, btnH = 25;
 
+            // Верхняя панель (чекбоксы и Info)
             if (g_hChkDump) MoveWindow(g_hChkDump, margin, margin+2, 60, 20, TRUE);
             MoveWindow(g_hComboFontSize, 80, margin, 60, 200, TRUE);
             MoveWindow(g_hComboEnc, 145, margin, 95, 200, TRUE);
@@ -2330,12 +2909,14 @@ LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             MoveWindow(g_hChkTopMost, 385, margin+2, 45, 20, TRUE);
             MoveWindow(g_hBtnAbout, 435, margin, 35, 22, TRUE);
 
+            // Окно приёма
             int rxTop = margin + barH + 5;
             int bottomPanelHeight = 30 * 3 + 10;
             int rxH = h - rxTop - margin - bottomPanelHeight;
             if (rxH < 20) rxH = 20;
             MoveWindow(g_hEditRx, margin, rxTop, w-margin*2, rxH, TRUE);
 
+            // Строка 1: Команда, суффикс, задержка, авто, SEND, CLEAR
             int bottomY1 = h - margin - bottomPanelHeight + 5;
             int btnSendW = 60, btnClrW = 60, suffixW = 100, infoBtnW = 22;
             int delayW = 60, repeatW = 75;
@@ -2349,14 +2930,21 @@ LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             MoveWindow(g_hBtnSend, w - margin - btnSendW - btnClrW - 15, bottomY1, btnSendW, btnH, TRUE);
             MoveWindow(g_hBtnClear, w - margin - btnClrW - 5, bottomY1, btnClrW, btnH, TRUE);
 
+            // Строка 2: Кнопки скриптов [?] [SCRIPT] [RUN] - СЛЕВА
             int bottomY2 = bottomY1 + 28;
-            int scriptInfoW = 22, loadBtnW = 50, runBtnW = 50;
-            int scriptPathW = w - margin*2 - scriptInfoW - loadBtnW - runBtnW - 30;
-            MoveWindow(g_hEditScriptPath, margin, bottomY2, scriptPathW, btnH, TRUE);
-            MoveWindow(g_hBtnScriptInfo, margin + scriptPathW + 5, bottomY2, scriptInfoW, btnH, TRUE);
-            MoveWindow(g_hBtnLoadScript, margin + scriptPathW + scriptInfoW + 10, bottomY2, loadBtnW, btnH, TRUE);
-            MoveWindow(g_hBtnRunScript, margin + scriptPathW + scriptInfoW + loadBtnW + 15, bottomY2, runBtnW, btnH, TRUE);
+            int scriptInfoW = 22;      // кнопка "?"
+            int scriptEditW = 56;      // кнопка "SCRIPT"
+            int scriptRunW = 45;       // кнопка "RUN"
+            int spacing = 4;
+            
+            // Прижимаем к левому краю
+            int startX = margin;
 
+            MoveWindow(g_hBtnScriptInfo, startX, bottomY2, scriptInfoW, btnH, TRUE);
+            MoveWindow(g_hBtnEditScript, startX + scriptInfoW + spacing, bottomY2, scriptEditW, btnH, TRUE);
+            MoveWindow(g_hBtnRunScript, startX + scriptInfoW + spacing + scriptEditW + spacing, bottomY2, scriptRunW, btnH, TRUE);
+
+            // Строка 3: Кнопки банков макросов
             int bottomY3 = bottomY2 + 28;
             int macroBtnW = (w - margin * 2) / MACRO_BANK_COUNT;
             if (macroBtnW < 30) macroBtnW = 30;
@@ -2398,13 +2986,13 @@ LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                                 g_txIntervalMs = d; PrepareAutoSendData(); ResetEvent(g_hTxStopEvent); g_isAutoSending = TRUE;
                                 if (g_hBtnSend) SetWindowTextW(g_hBtnSend, L"STOP");
                             }
-                            if (g_isScriptRunning) { SetWindowTextW(g_hBtnRunScript, L"STOP"); RunNextScriptCommand(); }
+                            if (g_isScriptRunning) { SetWindowTextW(g_hBtnRunScript, L"STOP"); RunNextGlobalScriptCommand(); }
                         }
                     }
                 }
             } else if (wp == TIMER_SCRIPT_ID) {
                 EnterCriticalSection(&g_csComm); BOOL portValid = (g_hPort != INVALID_HANDLE_VALUE); LeaveCriticalSection(&g_csComm);
-                if (portValid && IsWindowVisible(g_hwndTerminal)) RunNextScriptCommand(); else KillTimer(hwnd, TIMER_SCRIPT_ID);
+                if (portValid && IsWindowVisible(g_hwndTerminal)) RunNextGlobalScriptCommand(); else KillTimer(hwnd, TIMER_SCRIPT_ID);
             }
             return 0;
         }
@@ -2483,34 +3071,111 @@ LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                         L"`0D0A`    CR+LF (Windows)\r\n"
                         L"`0A`      LF (Unix/Linux)\r\n"
                         L"`0D`      CR (Mac Classic)\r\n\r\n"
-                        L"Обратные кавычки:\r\n"
-                        L"Любой HEX в обратных кавычках\r\n"
-                        L"`XX`, `XXXX`, `AA BB CC`\r\n"
-                        L"Пробелы внутри кавычек игнорируются.\r\n"
-                        L"Регистр не важен: `aa` = `AA`";
+                        L"Inline-синтаксис внутри обратных кавычек:\r\n"
+                        L"=========================================\r\n"
+                        L"2 символа  = HEX (AA)\r\n"
+                        L"3 символа  = DEC 000..255 (011)\r\n"
+                        L"4+ символов = HEX чётной длины (0D0A)\r\n"
+                        L"Разделители: пробел, запятая, точка\r\n"
+                        L"Примеры:\r\n"
+                        L"  `011 001 255` -> 0B 01 FF\r\n"
+                        L"  `AA,bb,123.01` -> AA BB 7B 01\r\n"
+                        L"  `0D0A` -> 0D 0A";
                     HWND hInfo = CreateWindowExW(WS_EX_TOOLWINDOW, L"WT232_Info_Scroll_Class",
                                                  L"Справка: Суффиксы", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-                                                 CW_USEDEFAULT, CW_USEDEFAULT, 380, 420,
+                                                 CW_USEDEFAULT, CW_USEDEFAULT, 420, 480,
                                                  hwnd, NULL, GetModuleHandle(NULL), (LPVOID)suffixHelp);
                     if (hInfo) { ShowWindow(hInfo, SW_SHOW); UpdateWindow(hInfo); ApplyThemeToWindow(hInfo); }
                     break;
                 }
                 case IDC_BTN_SCRIPT_INFO: {
-                    static const wchar_t scriptHelp[] = L"Справка по скриптам:\r\n=========================================\r\n\r\nФормат файла (.txt):\r\nКаждая строка - одна команда.\r\nПоддерживается инлайн-HEX (`XX`).\r\n\r\nДирективы:\r\n1000        - глобальная задержка (мс)\r\n(только в первой строке)\r\n#DELAY 500  - задержка перед след. командой\r\n#STOP       - остановить скрипт\r\n#...        - комментарий (игнорируется)\r\n\r\nБез #STOP скрипт выполняется циклически.";
-                    HWND hInfo = CreateWindowExW(WS_EX_TOOLWINDOW, L"WT232_Info_Scroll_Class", L"Справка: Скрипты", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 380, 450, hwnd, NULL, GetModuleHandle(NULL), (LPVOID)scriptHelp);
-                    if (hInfo) { ShowWindow(hInfo, SW_SHOW); UpdateWindow(hInfo); ApplyThemeToWindow(hInfo); } break;
+                    static const wchar_t scriptHelp[] =
+				    L"Справка по скриптам:\r\n"
+				    L"=========================================\r\n\r\n"
+				    L"ГЛОБАЛЬНЫЙ СКРИПТ:\r\n"
+				    L"------------------\r\n"
+				    L"• Файл скрипта: [имя_программы].wts\r\n"
+				    L"• Создаётся автоматически при нажатии SCRIPT\r\n"
+				    L"• Каждая строка - одна команда\r\n"
+				    L"• Поддерживается инлайн-HEX/DEC внутри `...`\r\n"
+				    L"\r\n"
+				    L"МАКРОСЫ:\r\n"
+				    L"---------\r\n"
+				    L"• 5 банков по 24 ячейки (4x6)\r\n"
+				    L"• Кнопка R->E / E->R:\r\n"
+				    L"  - R->E = переключиться в режим редактирования\r\n"
+				    L"  - E->R = переключиться в режим выполнения\r\n"
+				    L"• MODE: RUN  - режим выполнения (клик по ячейке отправляет команду)\r\n"
+				    L"• MODE: EDIT - режим редактирования (клик по ячейке открывает редактор)\r\n"
+				    L"• Название банка можно изменить в режиме EDIT\r\n"
+				    L"• При переименовании банка автоматически переименовывается файл скрипта\r\n"
+				    L"\r\n"
+				    L"ДИРЕКТИВЫ СКРИПТОВ:\r\n"
+				    L"-------------------\r\n"
+				    L"1000        - глобальная задержка (мс) в первой строке\r\n"
+				    L"#DELAY 500  - задержка перед следующей командой\r\n"
+				    L"#STOP       - остановить скрипт\r\n"
+				    L"#...        - комментарий (игнорируется)\r\n"
+				    L"\r\n"
+				    L"Без #STOP скрипт выполняется циклически.\r\n"
+				    L"\r\n"
+				    L"INLINE-СИНТАКСИС (внутри `...`):\r\n"
+				    L"=========================================\r\n"
+				    L"2 символа  = HEX (AA)\r\n"
+				    L"3 символа  = DEC 000..255 (011)\r\n"
+				    L"4+ символов = HEX чётной длины (0D0A)\r\n"
+				    L"Разделители: пробел, запятая, точка\r\n"
+				    L"\r\n"
+				    L"ПРИМЕРЫ:\r\n"
+				    L"---------\r\n"
+				    L"  AT\r\n"
+				    L"  AT+BAUD=9600\r\n"
+				    L"  `0D0A`          -> CR+LF\r\n"
+				    L"  `011 001 255`   -> 0B 01 FF\r\n"
+				    L"  `AA,bb,123.01`  -> AA BB 7B 01";
+                    HWND hInfo = CreateWindowExW(WS_EX_TOOLWINDOW, L"WT232_Info_Scroll_Class",
+                                                 L"Справка: Скрипты", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+                                                 CW_USEDEFAULT, CW_USEDEFAULT, 420, 520,
+                                                 hwnd, NULL, GetModuleHandle(NULL), (LPVOID)scriptHelp);
+                    if (hInfo) { ShowWindow(hInfo, SW_SHOW); UpdateWindow(hInfo); ApplyThemeToWindow(hInfo); }
+                    break;
                 }
-                case IDC_BTN_LOAD_SCRIPT: {
-                    OPENFILENAMEW ofn; wchar_t szFile[MAX_PATH] = L""; ZeroMemory(&ofn, sizeof(ofn));
-                    ofn.lStructSize = sizeof(ofn); ofn.hwndOwner = hwnd; ofn.lpstrFile = szFile; ofn.nMaxFile = MAX_PATH;
-                    ofn.lpstrFilter = L"Text Files (*.txt)\0*.txt\0All Files (*.*)\0*.*\0"; ofn.nFilterIndex = 1; ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
-                    if (GetOpenFileNameW(&ofn)) LoadScriptFile(szFile); break;
+                case IDC_BTN_EDIT_SCRIPT: {
+                    // Create/open global script
+                    wchar_t scriptPath[MAX_PATH];
+                    GetGlobalScriptPath(scriptPath, MAX_PATH);
+                    wcscpy(g_globalScriptPath, scriptPath);
+                    OpenScriptFile(hwnd, scriptPath);
+                    break;
                 }
                 case IDC_BTN_RUN_SCRIPT: {
-                    if (g_isScriptRunning) StopScript();
-                    else {
-                        if (g_scriptCount > 0) { g_isScriptRunning = TRUE; SetWindowTextW(g_hBtnRunScript, L"STOP"); g_scriptCurrentIndex = 0; RunNextScriptCommand(); }
-                        else MessageBoxW(hwnd, L"Сначала загрузите файл скрипта!", L"Внимание", MB_ICONWARNING);
+                    // Check if script file exists
+                    wchar_t scriptPath[MAX_PATH];
+                    GetGlobalScriptPath(scriptPath, MAX_PATH);
+                    wcscpy(g_globalScriptPath, scriptPath);
+                    
+                    if (_waccess(scriptPath, 0) != 0) {
+                        wchar_t msg[256];
+                        swprintf(msg, sizeof(msg)/sizeof(wchar_t),
+                            L"Файл скрипта '%ls.wts' не найден.\nСоздайте его через кнопку SCRIPT.",
+                            g_exeName);
+                        MessageBoxW(hwnd, msg, L"Файл не найден", MB_ICONWARNING | MB_OK);
+                        break;
+                    }
+                    
+                    LoadGlobalScript();
+                    
+                    if (g_isScriptRunning) {
+                        StopGlobalScript();
+                    } else {
+                        if (g_scriptCount > 0) {
+                            g_isScriptRunning = TRUE;
+                            SetWindowTextW(g_hBtnRunScript, L"STOP");
+                            g_scriptCurrentIndex = 0;
+                            RunNextGlobalScriptCommand();
+                        } else {
+                            MessageBoxW(hwnd, L"Скрипт пуст! Добавьте команды в файл.", L"Внимание", MB_ICONWARNING | MB_OK);
+                        }
                     }
                     break;
                 }
