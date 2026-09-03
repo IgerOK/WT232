@@ -1,4 +1,4 @@
-# WT232 Terminal v0.6.1
+# WT232 Terminal v0.6.2
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
@@ -126,6 +126,25 @@ WT232 — универсальный Windows-терминал для COM-пор�
 ---
 
 ## Журнал изменений
+
+### v0.6.2 — Прямое чтение USB дескрипторов через IOCTL
+
+**Новая архитектура чтения USB информации:**
+- Реализовано прямое чтение USB дескрипторов через `IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION`
+- Убраны зависимости от PowerShell и чтения реестра для получения Product/Manufacturer/Serial
+- Добавлены функции: `ReadUsbStringFromHubW()`, `ExtractPortFromLocationW()`, `ReadUsbDescriptorsDirectW()`
+- Используются прямые Windows API вызовы для доступа к USB хабу
+
+**Исправления:**
+- Исправлена классификация портов: теперь правильно определяются USB CDC устройства vs стандартные последовательные порты
+- Неправильно определялся класс для PCI и виртуальных портов (com0com)
+
+**Результат:**
+Теперь программа показывает точные значения из USB дескрипторов:
+- **VID/PID**: из Device Descriptor
+- **Manufacturer**: из USB String Descriptor 1 (например, "Deqing")
+- **Product**: из USB String Descriptor 2 (например, "CH55xduino")
+- **Serial**: из USB String Descriptor 3 (например, "CH55x")
 
 ### v0.6.1 — Исправление утечек ресурсов и буферных переполнений
 
