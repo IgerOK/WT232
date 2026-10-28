@@ -23,3 +23,13 @@ desktop.ini
 *.zip
 *.7z
 *.rar
+
+# Pelles C: настройки окна IDE и база тегов (генерируются при сборке)
+*.ppx
+*.tag
+
+# Каталог сборки
+output/
+
+# AllToZed L1: локальные заметки, не в git
+.notes/
