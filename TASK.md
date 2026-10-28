@@ -13,9 +13,10 @@ _Триггеры: «продолжаем» / «продолжи» / «дале�
   2. `SaveMacroEditRect`/`LoadMacroEditRect` — секция `[MacroEdit]`, ключи X/Y/W/H.
   3. `LayoutMacroEdit` — растягивает поля Name/CMD по ширине, кнопки Save/Cancel по правому краю; вызывается из `WM_CREATE` и `WM_SIZE`.
   4. `WM_EXITSIZEMOVE` — сохраняет rect; `WM_GETMINMAXINFO` — min 300×130.
-  5. `ShowMacroEditWindow` — загружать сохранённый rect, если валиден.
+  5. `ShowMacroEditWindow` — загружать сохранённый rect (X/Y/W), если валиден.
+  6. **Только ширина:** высота фиксированная 150 (`WM_WINDOWPOSCHANGING` принудительно ставит `cy = fixedHeight`; из ini высота не восстанавливается).
 - **Текущее состояние:**
-  - сделано: объявления, `SaveMacroEditRect`/`LoadMacroEditRect`, `LayoutMacroEdit`, стиль окна, `WM_SIZE`/`WM_EXITSIZEMOVE`/`WM_GETMINMAXINFO`, загрузка rect в `ShowMacroEditWindow`; сборка `pocc` чистая (без warning)
+  - сделано: объявления, `SaveMacroEditRect`/`LoadMacroEditRect`, `LayoutMacroEdit`, стиль окна, `WM_SIZE`/`WM_WINDOWPOSCHANGING`(высота фикс)/`WM_EXITSIZEMOVE`/`WM_GETMINMAXINFO`, загрузка X/Y/W; сборка `pocc` чистая (без warning); по фидбеку — только изменение по ширине
   - в работе: ждёт сборки/проверки пользователем
   - не начато: —
 - **Следующие 2–3 шага:**
@@ -28,6 +29,7 @@ _Триггеры: «продолжаем» / «продолжи» / «дале�
   | `LayoutMacroEdit` вызывается из `WM_CREATE` и `WM_SIZE` | первичная расстановка + перестроение при ресайзе |
   | поля растягиваются, кнопки по правому краю | длинный текст команд умещается по ширине, кнопки на месте |
   | сохранять в `WM_EXITSIZEMOVE`, min `WM_GETMINMAXINFO` | запись только по завершении ресайза; не дать окну схлопнуться |
+  | только ширина: высота фикс 150 через `WM_WINDOWPOSCHANGING` | изменение высоты непрактично (фидбек пользователя), позиция Y и высота не восстановливаются из ini |
 - **Открытые вопросы:** —
 - **Файлы для чтения:** `main.c` — `MacroEditWndProc` (~L1726), `ShowMacroEditWindow` (~L1928), `LayoutMacroEdit`/`SaveMacroEditRect` (~L1618)
 - **Проверка:** сборка Pelles C + ручной тест (пользователь)
