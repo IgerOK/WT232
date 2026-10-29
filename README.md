@@ -1,4 +1,4 @@
-# WT232 Terminal v0.6.3
+# WT232 Terminal v0.6.4
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
@@ -127,6 +127,13 @@ WT232 — универсальный Windows-терминал для COM-пор�
 ---
 
 ## Журнал изменений
+
+### v0.6.4 — Кнопка SEND в окне Edit Macro
+
+- В окно Edit Macro добавлена кнопка «Send» (слева внизу, ниже строк Name/CMD)
+- В режиме MODE: EDIT отправляет текущее содержимое строки CMD в порт без сохранения в банк; окно остаётся открытым
+- Ядро отправки вынесено в `SendMacroTextRaw` (общее для RUN-режима и кнопки SEND)
+- Порт не открыт — MessageBox «Порт не открыт!»
 
 ### v0.6.3 — Изменяемые окна макросов
 
@@ -448,6 +455,6 @@ SOFTWARE.
 
 -------------------------------------------------------------------------------
 
-**WT232 Terminal v0.6.3** — Простой, мощный и удобный инструмент для работы с COM-портами в WINDOWS 7+.
+**WT232 Terminal v0.6.4** — Простой, мощный и удобный инструмент для работы с COM-портами в WINDOWS 7+.
 
 
